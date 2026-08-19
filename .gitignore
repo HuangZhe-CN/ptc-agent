@@ -1,0 +1,19 @@
+# 工具状态
+.mimosa/
+
+# 参考资料（用户单独管理，不入库）
+docs/后端大脑/
+docs/前端设计/
+
+# 构建产物
+node_modules/
+dist/
+out/
+*.vsix
+
+# 依赖与缓存
+.pnpm-store/
+
+# 系统文件
+.DS_Store
+Thumbs.db
