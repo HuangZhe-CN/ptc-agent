@@ -1,15 +1,25 @@
-import React from 'react'
+import React, { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useAgentStore } from '../../store'
-import { t } from '../../i18n'
+import { ft, type FtKey } from '../Floaters/floatersText'
+import { ModelPopover } from '../Floaters/ModelPopover'
 
 /**
  * 设计稿 §07.1 底部左侧模型控件：模型名 + quality + chevron，同一 baseline。
- * 本任务（Task 21）仅静态展示 active 模型；popover / quality 子菜单由 Task 24 接管。
+ * Task 24：接 ModelPopover——点击展开/再点收起；选中/Esc/点击外部关闭后焦点返回本按钮；
+ * 键盘（§20 交互表）：Enter 打开，↑↓ 选择，Esc 关闭（细节由 popover 内部 roving 处理）。
  */
 export function ModelTrigger(): JSX.Element {
   const locale = useAgentStore(s => s.locale)
   const providers = useAgentStore(s => s.providers)
   const active = useAgentStore(s => s.active)
+
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+
+  const close = (refocus?: boolean): void => {
+    setOpen(false)
+    if (refocus) btnRef.current?.focus()   /* 关闭后焦点返回 trigger（§7.2） */
+  }
 
   let label = '—'
   if (active) {
@@ -17,11 +27,31 @@ export function ModelTrigger(): JSX.Element {
     label = provider?.models.find(m => m.id === active.modelId)?.label ?? active.modelId
   }
 
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>): void => {
+    /* popover 打开时焦点通常在菜单内（其自身处理 Esc）；此处兜底焦点仍在 trigger 的 Esc */
+    if (e.key === 'Escape' && open) {
+      e.preventDefault()
+      close(true)
+    }
+  }
+
   return (
-    <button type="button" className="modelTrigger" title={label}>
-      <span className="modelLabel">{label}</span>
-      {active && <span className="modelQuality">{t(locale, `quality.${active.quality}`)}</span>}
-      <i className="codicon codicon-chevron-down" aria-hidden="true" />
-    </button>
+    <span className="modelTriggerWrap">
+      <button
+        ref={btnRef}
+        type="button"
+        className="modelTrigger"
+        title={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => (open ? close(true) : setOpen(true))}
+        onKeyDown={onKeyDown}
+      >
+        <span className="modelLabel">{label}</span>
+        {active && <span className="modelQuality">{ft(locale, `quality.${active.quality}` as FtKey)}</span>}
+        <i className="codicon codicon-chevron-down" aria-hidden="true" />
+      </button>
+      {open && <ModelPopover anchorRef={btnRef} onClose={close} />}
+    </span>
   )
 }

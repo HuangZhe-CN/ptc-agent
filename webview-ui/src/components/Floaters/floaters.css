@@ -1,0 +1,402 @@
+/* ============================================================
+   floaters.css — Task 24 浮层样式（ModelPopover + QueuePanel）
+   几何/动效来源【设计稿】§07（Model Popover）、§11（Queued Messages）、
+   §15（动效表）、§20（交互/hit target/HC）、§7.3/§11.2（动画建议）。
+   受控约束：不得修改 tokens.css——本文件由 Floaters 组件 import，
+   经 Vite（cssCodeSplit:false）并入 dist/index.css（加载顺序在 tokens.css 之后）。
+   表面复用 tokens.css 既有 .popover / .queuePanel（editorWidget 底+边框+
+   0 6px 18px widget-shadow）；颜色只写 --agent-* 语义 token，禁止硬编码 hex。
+   口径同 T21/T22：几何 = capture px × var(--scale)（382w 参考值 = capture × 0.5）。
+   ============================================================ */
+
+/* ---------- 挂载点定位 ---------- */
+/* Composer 外包一层：QueuePanel 占流式位置（出现在 Composer 正上方、同宽，
+   队列把 dock 撑高、Composer 保持贴底——§11「Composer 向下保持贴底」） */
+.composerWrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* ModelTrigger 外包一层：popover 的 absolute 锚定基准（trigger 下方控件左缘对齐） */
+.modelTriggerWrap {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+
+/* ============================================================
+   Model Popover（§07.2 / §07.3）
+   ============================================================ */
+
+/* 进入动画（§7.3 C 级建议 + §15 表）：120ms opacity + scale(.98→1) +
+   translateY(-2px→0)，cubic-bezier(.2,.8,.2,1)；transform-origin=锚点侧（bottom） */
+@keyframes popoverIn {
+  from { opacity: 0; transform: translateY(-2px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+/* 二级菜单（§7.3）：以 X 方向 2px 位移替代 Y 位移 */
+@keyframes submenuIn {
+  from { opacity: 0; transform: translateX(-2px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.modelPopover {
+  position: absolute;
+  /* 实现布局中 Composer 常驻底部 dock（trigger 距视口底 ≈60–100px），
+     向下展开必然被裁切；参照录屏 G01（菜单浮在 Composer 上方区域）自 trigger
+     上缘向上展开。translateY(-2px→0) 与 origin=bottom 即锚点侧口径 */
+  bottom: calc(100% + 6px);
+  left: 0;                                  /* 左缘与模型控件略错位：对齐 trigger 左缘（§7.2 不贴屏幕边缘） */
+  z-index: 60;
+  box-sizing: border-box;
+  min-width: 220px;
+  max-width: 300px;
+  padding: 4px;
+  border-radius: 10px;                      /* §7.2 圆角约 10–12 CSS px（计划口径 10px） */
+  transform-origin: bottom left;            /* §15：transform-origin=anchor side */
+  animation: popoverIn 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.modelPopoverTitle {
+  padding: 5px 10px 4px;
+  font-size: 12px;
+  font-weight: 600;                         /* §7.2 标题 Model：Muted + semibold */
+  color: var(--agent-muted);
+}
+.modelPopoverEmpty {
+  padding: 4px 10px 8px;
+  font-size: 12px;
+  color: var(--agent-muted);
+}
+
+/* ---------- 行（§7.2：行高 ≈40–42 capture ≈ 20–21 CSS px；名称左、标签右） ---------- */
+.modelRow {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border-radius: 5px;
+  min-height: max(20px, calc(var(--scale) * 41px));
+}
+.modelRowMain {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: max(20px, calc(var(--scale) * 41px));
+  padding: 1px 4px 1px 10px;
+  border: none;
+  border-radius: 5px 0 0 5px;
+  background: transparent;
+  color: var(--agent-popover-fg);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.modelRowMore {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  border: none;
+  border-radius: 0 5px 5px 0;
+  background: transparent;
+  color: var(--agent-fg-2);
+  cursor: pointer;
+}
+.modelRowMore .codicon { font-size: 14px; }
+
+/* hover=list.hoverBackground（§20 交互表）；选中行保持选中底不被 hover 覆盖 */
+.modelRow:not(.isActive) .modelRowMain:hover,
+.modelRow:not(.isActive) .modelRowMore:hover {
+  background: var(--agent-hover-bg);
+  color: var(--agent-hover-fg);
+}
+/* 当前模型=list.activeSelectionBackground + 左缘 2px 主色条（§7.2/计划） */
+.modelRow.isActive {
+  background: var(--agent-selected-bg);
+  color: var(--agent-selected-fg);
+}
+.modelRow.isActive::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--agent-primary-bg);
+}
+.modelRowMain:focus-visible,
+.modelRowMore:focus-visible {
+  outline: 1px solid var(--agent-focus);
+  outline-offset: -1px;
+}
+
+.modelRowProvider {
+  flex: none;
+  font-size: 11px;
+  color: var(--agent-fg-2);
+}
+.modelRow.isActive .modelRowProvider { color: var(--agent-selected-fg); opacity: 0.8; }
+.modelRowName {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--agent-fg);
+}
+.modelRow.isActive .modelRowName { color: var(--agent-selected-fg); }
+.modelRowTags {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 2px;
+}
+.modelTagThink {
+  font-size: 11px;
+  color: var(--agent-fg-2);                 /* 能力/速度标签居右（§7.2），muted 不抢模型名 */
+}
+.modelRow.isActive .modelTagThink { color: var(--agent-selected-fg); opacity: 0.85; }
+.modelKeyHint {
+  font-size: 12px;
+  color: var(--agent-muted);                /* providerKeyed=false：仅提示不禁用（本地网关可空 key） */
+}
+
+/* ---------- quality 二级菜单（§7.2：竖排 Low/Medium/High，主菜单右侧、同表面） ---------- */
+.qualityMenu {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 2px);                   /* 靠主菜单右侧弹出（§7.2），2px 间隙 */
+  z-index: 70;
+  box-sizing: border-box;
+  min-width: 120px;
+  padding: 4px;
+  border-radius: 10px;
+  transform-origin: left center;
+  animation: submenuIn 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.qualityRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: max(20px, calc(var(--scale) * 41px));
+  padding: 1px 8px 1px 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--agent-popover-fg);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+.qualityRow:hover { background: var(--agent-hover-bg); }
+.qualityRow.isActive {
+  background: var(--agent-selected-bg);
+  color: var(--agent-selected-fg);
+}
+.qualityRow.isActive::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--agent-primary-bg);
+}
+.qualityRow:focus-visible {
+  outline: 1px solid var(--agent-focus);
+  outline-offset: -1px;
+}
+.qualityCheck {
+  flex: none;
+  width: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;                  /* 固定 slot：check 有无不挤压标签（§17.1 口径） */
+}
+.qualityCheck .codicon { font-size: 13px; }
+
+/* ============================================================
+   QueuePanel（§11 / §11.2）
+   ============================================================ */
+
+/* 出现动画（§11.2/§15）：140–180ms translateY(6→0)+opacity，ease-out，无 spring */
+@keyframes queueIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.queuePanel {
+  position: relative;
+  box-sizing: border-box;
+  margin-bottom: calc(var(--scale) * 14px); /* 队列卡与 Composer 间距（录屏约 14–20 capture） */
+  padding: 4px 6px;
+  border-radius: 10px;                      /* 大圆角（§11），与 popover 同半径 */
+  animation: queueIn 160ms ease-out;
+}
+
+/* ---------- Header（§11：标题 semibold + 圆形计数 badge + 说明 muted + 右 chevron） ---------- */
+.queueHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--agent-popover-fg);
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.queueHeader:focus-visible {
+  outline: 1px solid var(--agent-focus);
+  outline-offset: -1px;
+}
+.queueTitle {
+  flex: none;
+  font-weight: 600;
+  color: var(--agent-fg);
+  white-space: nowrap;
+}
+.queueBadge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;                     /* 圆形计数 badge */
+  background: var(--agent-secondary-bg);
+  color: var(--agent-secondary-fg);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.queueHint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;                      /* 窄侧栏下说明单行截断（§2.3 W<340 允许省略） */
+  color: var(--agent-fg-2);
+  font-size: 11.5px;
+}
+.queueChevron {
+  flex: none;
+  font-size: 14px;
+  color: var(--agent-fg-2);
+  transition: transform 140ms ease;         /* §15：chevron 120–160ms rotate */
+}
+.queuePanel.isOpen .queueChevron { transform: rotate(180deg); }
+
+/* ---------- 展开/收起（§11：内容高度 0→自然；§11.2 160–220ms ease-out） ---------- */
+.queueBody {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 180ms ease-out, opacity 180ms ease-out;
+}
+.queuePanel.isOpen .queueBody { grid-template-rows: 1fr; opacity: 1; }
+.queueBodyInner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---------- 行（§11：左 message icon + 中摘要 + 右三操作；行高 ≈20 CSS px 无分隔线） ---------- */
+.queueRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: max(20px, calc(var(--scale) * 40px));
+  padding: 2px 4px;
+}
+.queueRowIcon {
+  flex: none;
+  font-size: 14px;
+  color: var(--agent-fg-2);
+}
+.queueText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--agent-fg);
+}
+.queueRowActions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+}
+.queueAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--agent-fg-2);
+  cursor: pointer;
+}
+.queueAction:hover {                        /* §20 交互表：Queue row actions hover=toolbar.hoverBackground */
+  background: var(--agent-toolbar-hover);
+  color: var(--agent-fg);
+}
+.queueAction:focus-visible {
+  outline: 1px solid var(--agent-focus);
+  outline-offset: -1px;
+}
+.queueAction .codicon { font-size: 14px; }
+
+/* ---------- 行内编辑（编辑=行内 textarea，Enter 确认 / Esc 取消） ---------- */
+.queueEditInput {
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--agent-input-border);
+  border-radius: 4px;
+  background: var(--agent-input-bg);
+  color: var(--agent-input-fg);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 20px;
+  resize: none;
+  outline: none;
+  overflow: hidden;
+}
+.queueEditInput:focus {
+  outline: 1px solid var(--agent-focus);
+  outline-offset: -1px;
+}
+
+/* ---------- High Contrast（§3.5/§20.2：不能只靠底色差表达 hover/selected） ---------- */
+body.vscode-high-contrast .modelRow.isActive,
+body.vscode-high-contrast .qualityRow.isActive,
+body.vscode-high-contrast-light .modelRow.isActive,
+body.vscode-high-contrast-light .qualityRow.isActive {
+  outline: 1px solid var(--agent-contrast-active);
+}
+/* modelPopover/qualityMenu/queuePanel 均复用 tokens.css 的 .popover/.queuePanel 类，
+   HC 强制边框+去阴影已由 tokens.css HC 段覆盖，此处不重复声明 */
