@@ -31,7 +31,7 @@ describe('buildGeminiBody', () => {
 })
 
 describe('geminiAdapter.stream', () => {
-  it('thought/text/functionCall 完整对象、usage、finishReason', async () => {
+  it('thought/text/functionCall 完整对象、usage、finishReason、replay_envelope 原样 parts', async () => {
     const events: any[] = []
     const iter = geminiAdapter.stream(req(), fakeFetch(sse(
       '{"candidates":[{"content":{"role":"model","parts":[{"text":"th","thought":true}]}}],"usageMetadata":{"promptTokenCount":2,"thoughtsTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":2}}',
@@ -42,7 +42,30 @@ describe('geminiAdapter.stream', () => {
       { type: 'thinking_delta', text: 'th' },
       { type: 'text_delta', text: 'Hi' },
       { type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":"return 1","description":"d"}' },
+      // C2：parts 原样累积（functionCall 携带 thoughtSignature）
+      { type: 'replay_envelope', envelope: { parts: [
+        { text: 'th', thought: true },
+        { text: 'Hi' },
+        { functionCall: { name: 'run_code', args: { code: 'return 1', description: 'd' } }, thoughtSignature: 'SIG' },
+      ] } },
       { type: 'message_done', stopReason: 'tool_use', usage: { input: 2, output: 8 } },
     ])
+  })
+  it('C2：thought part 与 functionCall part 各自携带的 thoughtSignature 均原样进信封（逐字节）', async () => {
+    const events: any[] = []
+    const TS_THOUGHT = 'c2lnLW9uLXRoaW5raW5nLXBhcnQ='
+    const TS_CALL = 'c2lnLW9uLWNhbGwtcGFydA=='
+    const iter = geminiAdapter.stream(req(), fakeFetch(sse(
+      `{"candidates":[{"content":{"role":"model","parts":[{"text":"preamble","thought":true,"thoughtSignature":"${TS_THOUGHT}"}]}}]}`,
+      `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"run_code","args":{"code":"return 2","description":"dd"}},"thoughtSignature":"${TS_CALL}"}]},"finishReason":"STOP"}]}`,
+    )))
+    for await (const e of iter) events.push(e)
+    const envelope = events.find(e => e.type === 'replay_envelope')
+    expect(envelope).toBeDefined()
+    expect(envelope.envelope).toEqual({ parts: [
+      { text: 'preamble', thought: true, thoughtSignature: TS_THOUGHT },
+      { functionCall: { name: 'run_code', args: { code: 'return 2', description: 'dd' } }, thoughtSignature: TS_CALL },
+    ] })
+    expect(events.findIndex(e => e.type === 'replay_envelope')).toBeLessThan(events.findIndex(e => e.type === 'message_done'))
   })
 })

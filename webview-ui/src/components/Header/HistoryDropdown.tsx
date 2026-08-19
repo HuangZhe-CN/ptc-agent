@@ -37,6 +37,9 @@ export function HistoryDropdown({ anchorRef, onClose }: {
 }): JSX.Element {
   const locale = useAgentStore(s => s.locale)
   const send = useAgentStore(s => s.send)
+  const phase = useAgentStore(s => s.phase)
+  // I3：运行中禁用切换（host 侧 isTurnActive 守卫兜底）
+  const busy = phase === 'running' || phase === 'submitting'
   /** null=加载中；[]=空/失败（空态文案统一，失败不弹错——下拉可重开重试） */
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -100,14 +103,15 @@ export function HistoryDropdown({ anchorRef, onClose }: {
       {sessions !== null && sessions.length > 0 && (
         <div className="historyList" role="group">
           {sessions.map(s => (
-            <button
-              key={s.sessionId}
-              type="button"
-              role="menuitem"
-              className="historyRow"
-              title={s.title}
-              onClick={() => open(s.sessionId)}
-            >
+              <button
+                key={s.sessionId}
+                type="button"
+                role="menuitem"
+                className="historyRow"
+                title={s.title}
+                disabled={busy}
+                onClick={() => open(s.sessionId)}
+              >
               <span className="historySessionTitle">{s.title}</span>
               <span className="historyDate">{formatDate(s.createdAt, locale)}</span>
             </button>

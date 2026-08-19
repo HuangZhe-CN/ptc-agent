@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { AgentLoop, type LoopDeps } from '../src/agent/loop'
 import { mapDispatchEvent } from '../src/agent/events'
+import { anthropicAdapter, buildAnthropicBody } from '../src/protocol/anthropic'
+import { geminiAdapter, buildGeminiBody } from '../src/protocol/gemini'
 import type { ProtocolAdapter, StreamRequest, ResolvedProvider, AssistantTurn, HistoryMessage } from '../src/protocol/types'
 import type { CodeRunResult, RunOptions } from '../src/runtime/codeRuntime'
 import type { ToolDef } from '../src/tools/registry'
@@ -124,6 +126,9 @@ describe('AgentLoop', () => {
     const completions = ops.filter(o => o.op === 'append' && o.event.type === 'completion')
       .map(o => (o as { event: { markdown: string } }).event.markdown)
     expect(completions).toEqual(['par', 'All '])   // append 只带首个增量，后续走 patch
+    // I5：失败轮 partial completion 气泡在重试前被 remove 撤下
+    const partialId = (ops.find(o => o.op === 'append' && o.event.type === 'completion' && (o as { event: { markdown: string } }).event.markdown === 'par') as { event: { id: string } }).event.id
+    expect(ops).toContainEqual({ op: 'remove', id: partialId })
     const markdowns = ops.filter(o => o.op === 'patch').map(o => (o as { patch: { markdown?: string } }).patch.markdown)
     expect(markdowns).toContain('All done')
     const finalTurn = history[history.length - 1] as { role: 'assistant'; turn: AssistantTurn }
@@ -244,6 +249,157 @@ describe('AgentLoop', () => {
     expect(editEvent.event).toMatchObject({ file: 'b.ts', fileKind: 'ts', add: 2, del: 0 })
     const changesOp = ops.find(o => o.op === 'changes') as { changes: { path: string; add: number; del: number; kind: string }[] }
     expect(changesOp.changes).toEqual([{ path: 'b.ts', add: 2, del: 0, kind: 'ts' }])
+  })
+
+  it('I5：中间轮 preamble 气泡在 tool_use 重置时 remove 撤下；最终 completion 仅含最终轮文本', async () => {
+    const ops: UiOp[] = []
+    const history: HistoryMessage[] = []
+    const { adapter } = fakeAdapter([
+      [
+        { type: 'text_delta', text: 'preamble ' },   // 无 thoughtId → 流式期误建 completion 气泡
+        { type: 'text_delta', text: 'before tool' },
+        { type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":"return 1","description":"d"}' },
+        { type: 'message_done', stopReason: 'tool_use' },
+      ],
+      [{ type: 'text_delta', text: 'All done' }, { type: 'message_done', stopReason: 'end_turn' }],
+    ])
+    const loop = new AgentLoop(baseDeps({
+      adapter, runtime: fakeRuntime({ logs: [] }),
+      emit: o => ops.push(...o),
+      onHistory: m => history.push(m), getHistory: () => history,
+    }))
+    expect(await loop.run('x', new AbortController().signal)).toBe('completed')
+    const completionAppends = ops.filter(o => o.op === 'append' && o.event.type === 'completion') as Array<{ event: { id: string; markdown: string } }>
+    expect(completionAppends.map(c => c.event.markdown)).toEqual(['preamble ', 'All done'])
+    // preamble 气泡被撤下；最终 completion 未被撤
+    expect(ops).toContainEqual({ op: 'remove', id: completionAppends[0].event.id })
+    expect(ops).not.toContainEqual({ op: 'remove', id: completionAppends[1].event.id })
+    // 最终 completion 只含最终轮文本（无 preamble 拼接泄漏；单增量 → append 即全文）
+    expect(completionAppends[1].event.markdown).toBe('All done')
+    // 中间轮 preamble 仍完整入历史（模型可见），只是 UI 不再呈现为最终总结
+    const toolTurn = history[1] as { role: 'assistant'; turn: AssistantTurn }
+    expect(toolTurn.turn.text).toBe('preamble before tool')
+  })
+
+  it('M1：程序以原始值调用工具（args 非 object）→ WeakMap key 守卫，不抛 Invalid value used as weak map key', async () => {
+    const ops: UiOp[] = []
+    const tools = new Map<string, ToolDef>([
+      ['read_file', { name: 'read_file', concurrencySafe: true, execute: async () => ({ content: 'x', totalLines: 1, startLine: 1 }) }],
+    ])
+    const runtime = {
+      run: async (opts: RunOptions): Promise<CodeRunResult> => {
+        await opts.bindings.read_file('a.js' as never)   // 原始值 args（字符串）
+        return { logs: [], value: true }
+      },
+    }
+    const loop = new AgentLoop(baseDeps({
+      adapter: fakeAdapter([
+        [{ type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":"return 1","description":"d"}' }, { type: 'message_done', stopReason: 'tool_use' }],
+        [{ type: 'message_done', stopReason: 'end_turn' }],
+      ]).adapter,
+      runtime, tools,
+      emit: o => ops.push(...o),
+      onHistory: () => {}, getHistory: () => [],
+    }))
+    expect(await loop.run('x', new AbortController().signal)).toBe('completed')
+    expect(appended(ops)).toContain('explore')
+  })
+
+  describe('C1/C2 端到端：SSE 字节 → 适配器 → loop → turn.replay → 下一请求 body', () => {
+    const enc = new TextEncoder()
+    const sse = (...events: Array<[name: string, data: string]>): ReadableStream<Uint8Array> => new ReadableStream<Uint8Array>({
+      start(c) { for (const [name, data] of events) { c.enqueue(enc.encode(`event: ${name}\ndata: ${data}\n\n`)) } c.close() },
+    })
+    const anthropicToolRound = (sig: string) => sse(
+      ['message_start', '{"type":"message_start","message":{"usage":{"input_tokens":3,"output_tokens":1}}}'],
+      ['content_block_start', '{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}'],
+      ['content_block_delta', '{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"th"}}'],
+      ['content_block_delta', `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"${sig}"}}`],
+      ['content_block_stop', '{"type":"content_block_stop","index":0}'],
+      ['content_block_start', '{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu1","name":"run_code","input":{}}}'],
+      ['content_block_delta', '{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"code\\":\\"return 1\\",\\"description\\":\\"d\\"}"}}'],
+      ['content_block_stop', '{"type":"content_block_stop","index":1}'],
+      ['message_delta', '{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}'],
+      ['message_stop', '{"type":"message_stop"}'],
+    )
+    const anthropicFinalRound = () => sse(
+      ['content_block_start', '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'],
+      ['content_block_delta', '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"All done"}}'],
+      ['message_delta', '{"type":"message_delta","delta":{"stop_reason":"end_turn"}}'],
+      ['message_stop', '{"type":"message_stop"}'],
+    )
+
+    it('C1 anthropic：turn.replay.blocks 签名与流中 signature_delta 逐字节一致，并原样进入下一请求 body', async () => {
+      const SIG = 'EqQBCkgIBRAGKFWTQmFhZ2dnbmRlZGRlZA=='
+      const history: HistoryMessage[] = []
+      const requests: StreamRequest[] = []
+      const fetchImpl = (() => {
+        let round = 0
+        return async (): Promise<Response> => {
+          round++
+          return { ok: true, status: 200, headers: { get: () => null }, body: round === 1 ? anthropicToolRound(SIG) : anthropicFinalRound() } as unknown as Response
+        }
+      })()
+      const adapter: ProtocolAdapter = {
+        protocol: 'anthropic',
+        stream: (req, fetchOverride) => { requests.push(req); return anthropicAdapter.stream(req, fetchOverride ?? fetchImpl) },
+      }
+      const loop = new AgentLoop(baseDeps({ adapter, runtime: fakeRuntime({ logs: [] }), provider: provider('anthropic'),
+        onHistory: m => history.push(m), getHistory: () => history }))
+      expect(await loop.run('do it', new AbortController().signal)).toBe('completed')
+      // turn.replay：thinking 签名逐字节一致 + tool_use 原样
+      const toolTurn = history[1] as { role: 'assistant'; turn: AssistantTurn }
+      expect((toolTurn.turn.replay as { blocks: unknown[] }).blocks).toEqual([
+        { type: 'thinking', thinking: 'th', signature: SIG },
+        { type: 'tool_use', id: 'tu1', name: 'run_code', input: { code: 'return 1', description: 'd' } },
+      ])
+      // 下一请求 body：replay blocks 原样回传（非空伪签名）
+      expect(requests).toHaveLength(2)
+      const body = buildAnthropicBody(requests[1]) as { messages: Array<{ role: string; content: unknown }> }
+      expect(body.messages[1]).toEqual({ role: 'assistant', content: [
+        { type: 'thinking', thinking: 'th', signature: SIG },
+        { type: 'tool_use', id: 'tu1', name: 'run_code', input: { code: 'return 1', description: 'd' } },
+      ] })
+    })
+
+    it('C2 gemini：thought/functionCall part 的 thoughtSignature 原样采集，逐字节进入下一请求 body', async () => {
+      const TS_THOUGHT = 'c2lnLW9uLXRoaW5raW5nLXBhcnQ='
+      const TS_CALL = 'c2lnLW9uLWNhbGwtcGFydA=='
+      const history: HistoryMessage[] = []
+      const requests: StreamRequest[] = []
+      const toolRound = sse(
+        ['data', '{"candidates":[{"content":{"role":"model","parts":[{"text":"th","thought":true,"thoughtSignature":"' + TS_THOUGHT + '"}]}}]}'],
+        ['data', `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"run_code","args":{"code":"return 1","description":"d"}},"thoughtSignature":"${TS_CALL}"}]},"finishReason":"STOP"}]}`],
+      )
+      const finalRound = sse(
+        ['data', '{"candidates":[{"content":{"role":"model","parts":[{"text":"All done"}]},"finishReason":"STOP"}]}'],
+      )
+      const fetchImpl = (() => {
+        let round = 0
+        return async (): Promise<Response> => {
+          round++
+          return { ok: true, status: 200, headers: { get: () => null }, body: round === 1 ? toolRound : finalRound } as unknown as Response
+        }
+      })()
+      const adapter: ProtocolAdapter = {
+        protocol: 'gemini',
+        stream: (req, fetchOverride) => { requests.push(req); return geminiAdapter.stream(req, fetchOverride ?? fetchImpl) },
+      }
+      const loop = new AgentLoop(baseDeps({ adapter, runtime: fakeRuntime({ logs: [] }), provider: provider('gemini'),
+        onHistory: m => history.push(m), getHistory: () => history }))
+      expect(await loop.run('do it', new AbortController().signal)).toBe('completed')
+      const toolTurn = history[1] as { role: 'assistant'; turn: AssistantTurn }
+      expect((toolTurn.turn.replay as { parts: unknown[] }).parts).toEqual([
+        { text: 'th', thought: true, thoughtSignature: TS_THOUGHT },
+        { functionCall: { name: 'run_code', args: { code: 'return 1', description: 'd' } }, thoughtSignature: TS_CALL },
+      ])
+      expect(requests).toHaveLength(2)
+      const body = buildGeminiBody(requests[1]) as { contents: Array<{ role: string; parts: unknown }> }
+      expect(body.contents[1]).toEqual({ role: 'model', parts: [
+        { text: 'th', thought: true, thoughtSignature: TS_THOUGHT },
+        { functionCall: { name: 'run_code', args: { code: 'return 1', description: 'd' } }, thoughtSignature: TS_CALL },
+      ] })
+    })
   })
 })
 

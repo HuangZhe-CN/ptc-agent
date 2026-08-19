@@ -15,9 +15,11 @@ import { createTools } from '../tools/registry'
 
 const ADAPTERS: Record<Protocol, ProtocolAdapter> = { openai: openaiAdapter, anthropic: anthropicAdapter, gemini: geminiAdapter }
 
-/** VscodeApi.fs：SessionStore 依赖面 + SnapshotTracker 的 writeFile。 */
+/** VscodeApi.fs：SessionStore 依赖面 + SnapshotTracker 的 writeFile/deleteFile。 */
 export interface VscodeFsApi extends SessionStoreDeps {
   writeFile(p: string, s: string): Promise<void>
+  /** I1：新文件 Reject 时删除工作区文件；宿主必须提供（测试可省略，tracker 降级写空串） */
+  deleteFile?(p: string): Promise<void>
 }
 
 /** vscode 依赖注入面（extension.ts 提供真实现；测试提供假实现）。 */
@@ -61,11 +63,15 @@ export class AgentService {
 
   private cwd(): string { return this.deps.api.workspaceFolders() ?? process.cwd() }
 
+  /** I3：一轮提交进行中（loop 运行或提交占位）——会话切换类操作在此期间拒绝。 */
+  private isTurnActive(): boolean { return this.phase === 'running' || this.phase === 'submitting' || this.turnInFlight }
+
   /** UiOp 三路分发：本地状态归约（内存态） + JSONL 持久化（有会话时） + webview 推送。 */
   private emit(ops: UiOp[]): void {
     for (const op of ops) {
       if (op.op === 'append') this.events.push(op.event)
       else if (op.op === 'patch') this.events = this.events.map(e => e.id === op.id ? { ...e, ...op.patch, id: e.id } as TimelineEvent : e)
+      else if (op.op === 'remove') this.events = this.events.filter(e => e.id !== op.id)
       else if (op.op === 'phase') this.phase = op.phase
       else if (op.op === 'title') this.title = op.title
       else if (op.op === 'queue') this.queue = op.queue
@@ -85,7 +91,8 @@ export class AgentService {
       events: this.events, queue: this.queue,
       changes: this.tracker ? await this.tracker.changes(this.cwd()).catch(() => [] as FileChangeSummary[]) : [],
       providers, providerKeyed: keyed, active,
-      hasSessions: (await this.store.list()).length > 0,
+      // I4：会话库读取失败降级 hasSessions:false（单文件坏行由 store 层隔离，不阻塞快照下发）
+      hasSessions: await this.store.list().then(metas => metas.length > 0).catch(() => false),
     }
     this.lastSnapshotState = state
     this.deps.bridge.send({ type: 'snapshot', state })
@@ -117,8 +124,12 @@ export class AgentService {
         return
       }
       case 'selectModel': await this.deps.config.setActive(m.active); await this.bootSnapshot(); return
-      case 'newSession': await this.openSession(null); return
-      case 'openSession': await this.openSession(m.sessionId); return
+      case 'newSession':
+        if (this.isTurnActive()) return   // I3：运行中拒绝切换——避免 loop/JSONL 继续写向旧会话（串写）
+        await this.openSession(null); return
+      case 'openSession':
+        if (this.isTurnActive()) return   // I3：同上；UI 侧运行中禁用入口，此处兜底竞态
+        await this.openSession(m.sessionId); return
       case 'reviewFile': await this.deps.api.openDiff(this.sessionId ?? '', m.path.replace(/\\/g, '/')); return
       case 'reviewAccept': await this.acceptReject(m.path, 'accept'); return
       case 'reviewReject': await this.acceptReject(m.path, 'reject'); return
@@ -180,6 +191,7 @@ export class AgentService {
       writeFile: (p, s) => this.deps.api.fs.writeFile(p, s),
       mkdir: p => this.deps.api.fs.mkdir(p),
       exists: async p => { try { await this.deps.api.fs.readFile(p); return true } catch { return false } },
+      deleteFile: p => this.deps.api.fs.deleteFile ? this.deps.api.fs.deleteFile(p) : Promise.resolve(),
     })
     if (sessionId) {
       // 打开旧会话：回放 JSONL 恢复内存态；不得向旧会话文件追加 clear（会破坏其回放终态）

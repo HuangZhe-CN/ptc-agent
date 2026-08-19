@@ -49,6 +49,8 @@ export const geminiAdapter: ProtocolAdapter = {
       yield { type: 'stream_error', kind, message }; return
     }
     let input = 0, output = 0, sawFunctionCall = false
+    // C2：parts 原样累积（含 functionCall/thought part 的 thoughtSignature），供 loop 存入 turn.replay 原样回传
+    const replayParts: unknown[] = []
     for await (const ev of parseSse(res.body)) {
       let msg: any
       try { msg = JSON.parse(ev.data) } catch { continue }
@@ -60,13 +62,16 @@ export const geminiAdapter: ProtocolAdapter = {
       for (const part of cand?.content?.parts ?? []) {
         if (part.functionCall) {
           sawFunctionCall = true
+          replayParts.push({ ...part })   // 含 thoughtSignature（若有）
           yield { type: 'tool_call_delta', name: part.functionCall.name, argsDelta: JSON.stringify(part.functionCall.args) }
         } else if (typeof part.text === 'string' && part.text) {
+          replayParts.push({ ...part })   // thought/text part 原样（thoughtSignature 随 part 携带）
           yield part.thought ? { type: 'thinking_delta', text: part.text } : { type: 'text_delta', text: part.text }
         }
       }
       if (cand?.finishReason) {
         const stop = sawFunctionCall ? 'tool_use' : cand.finishReason === 'MAX_TOKENS' ? 'max_tokens' : 'end_turn'
+        if (replayParts.length > 0) yield { type: 'replay_envelope', envelope: { parts: replayParts } }
         yield { type: 'message_done', stopReason: stop, usage: { input, output } }
       }
     }

@@ -20,16 +20,27 @@ export class SessionStore {
   async load(sessionId: string): Promise<SessionRecord[]> {
     let text: string
     try { text = String(await this.deps.readFile(this.file(sessionId))) } catch { return [] }
-    return text.split('\n').filter(l => l.trim()).map(l => JSON.parse(l) as SessionRecord)
+    // I4：逐行容错——撕裂/损坏行跳过，不让单个坏行瘫痪整个会话回放
+    const records: SessionRecord[] = []
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const r = JSON.parse(line) as SessionRecord
+        if (r && typeof r === 'object' && typeof r.kind === 'string') records.push(r)
+      } catch { /* torn/corrupt line → skip */ }
+    }
+    return records
   }
   async list(): Promise<SessionMeta[]> {
     let files: string[]
     try { files = await this.deps.readDir(this.root) } catch { return [] }
     const metas: SessionMeta[] = []
     for (const f of files.filter(f => f.endsWith('.jsonl'))) {
-      const records = await this.load(f.slice(0, -6))
-      const meta = records.find(r => r.kind === 'meta') as { meta: SessionMeta } | undefined
-      if (meta) metas.push(meta.meta)
+      // I4：单文件失败隔离——一个坏会话文件不拖垮整个列表
+      try {
+        const meta = (await this.load(f.slice(0, -6))).find(r => r.kind === 'meta') as { meta: SessionMeta } | undefined
+        if (meta) metas.push(meta.meta)
+      } catch { /* skip unreadable session file */ }
     }
     return metas.sort((a, b) => b.createdAt - a.createdAt)
   }

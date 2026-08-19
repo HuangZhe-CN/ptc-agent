@@ -29,4 +29,20 @@ describe('parseSse', () => {
       '{"split":ted}',
     ])
   })
+  it('M2：混合换行边界（\\r\\n\\n 与 \\n\\r\\n）不吃下一 block 首字符', async () => {
+    const events = await collect(stream(
+      'event: one\r\ndata: {"a":1}\r\n\n',      // 块尾 \r\n\n（匹配长度 3）
+      'data: {"b":2}\n\r\n',                     // 块尾 \n\r\n（匹配长度 3）
+      'data: {"c":3}\n\n'))
+    expect(events).toEqual([
+      'one:{"a":1}',
+      '{"b":2}',
+      '{"c":3}',
+    ])
+  })
+  it('M2：混合换行跨 chunk 分割仍正确', async () => {
+    const events = await collect(stream(
+      'event: mixed\r\ndata: {"x":', '1}\r\n', '\n', 'data: {"y":2}\n\n'))
+    expect(events).toEqual(['mixed:{"x":1}', '{"y":2}'])
+  })
 })

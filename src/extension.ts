@@ -25,6 +25,7 @@ export function activate(context: vscode.ExtensionContext): void {
       appendFile: (p, s) => fsp.appendFile(p, s, 'utf8'),
       mkdir: async p => { await fsp.mkdir(p, { recursive: true }) },
       writeFile: (p, s) => fsp.writeFile(p, s, 'utf8'),
+      deleteFile: p => fsp.rm(p),   // I1：新文件 Reject 时删除工作区文件
     },
     openDiff: async (sessionId, relPath) => {
       const root = wsRoot() ?? process.cwd()

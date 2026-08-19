@@ -24,6 +24,7 @@ export type TimelineEvent =
 export type UiOp =
   | { op: 'append'; event: TimelineEvent }
   | { op: 'patch'; id: string; patch: Partial<TimelineEvent> & { type?: TimelineEvent['type'] } }  // patch 不得改 type/id
+  | { op: 'remove'; id: string }   // I5：从时间线移除事件（tool_use 轮重置时撤下中间轮误建的 completion 气泡）
   | { op: 'phase'; phase: SessionPhase }
   | { op: 'changes'; changes: FileChangeSummary[] }
   | { op: 'queue'; queue: QueuedMessage[] }
@@ -72,6 +73,8 @@ export type StreamEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'tool_call_delta'; name: string; argsDelta: string }
   | { type: 'message_done'; stopReason: 'tool_use' | 'end_turn' | 'max_tokens' | 'other'; usage?: { input: number; output: number } }
+  /** C1/C2：协议原生回放信封（Anthropic blocks / Gemini parts）——适配器在流中原样累积，loop 存入 turn.replay */
+  | { type: 'replay_envelope'; envelope: unknown }
   | { type: 'stream_error'; kind: ProtocolErrorKind; message: string; retryAfterMs?: number }
 
 export type ProtocolErrorKind = 'auth' | 'rateLimit' | 'network' | 'server' | 'invalidRequest' | 'aborted'
@@ -88,6 +91,7 @@ export function applyUiOps(state: WebviewState, ops: UiOp[]): WebviewState {
       case 'append': next.events = [...next.events, op.event]; break
       case 'patch':
         next.events = next.events.map(e => e.id === op.id ? { ...e, ...op.patch, id: e.id } as TimelineEvent : e); break
+      case 'remove': next.events = next.events.filter(e => e.id !== op.id); break
       case 'phase': next.phase = op.phase; break
       case 'changes': next.changes = op.changes; break
       case 'queue': next.queue = op.queue; break

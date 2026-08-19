@@ -22,11 +22,12 @@ export async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerato
     const { done, value } = await reader.read()
     if (done) break
     buf += decoder.decode(value, { stream: true })
-    let idx: number
-    // 事件块以空行结束；兼容 \n\n 与 \r\n\r\n
-    while ((idx = buf.search(/\r?\n\r?\n/)) !== -1) {
-      const block = buf.slice(0, idx)
-      buf = buf.slice(idx + (buf[idx] === '\r' ? 4 : 2))
+    // 事件块以空行结束；兼容 \n\n、\r\n\r\n 与混合 \r\n\n / \n\r\n（M2：按实际匹配长度跳过，不吃下一 block 首字符）
+    for (;;) {
+      const m = /\r?\n\r?\n/.exec(buf)
+      if (!m) break
+      const block = buf.slice(0, m.index)
+      buf = buf.slice(m.index + m[0].length)
       yield* emitBlock(block)
     }
   }

@@ -17,8 +17,11 @@ export function AgentHeader(): JSX.Element {
   const title = useAgentStore(s => s.title)
   const send = useAgentStore(s => s.send)
   const locale = useAgentStore(s => s.locale)
+  const phase = useAgentStore(s => s.phase)
   const [historyOpen, setHistoryOpen] = useState(false)
   const historyBtnRef = useRef<HTMLButtonElement>(null)
+  // I3：一轮提交进行中禁用新建/历史切换入口（host 侧另有 isTurnActive 守卫兜底竞态）
+  const busy = phase === 'running' || phase === 'submitting'
 
   return (
     <header className="agentHeader">
@@ -29,6 +32,7 @@ export function AgentHeader(): JSX.Element {
           className="iconButton"
           aria-label={t(locale, 'header.newSession')}
           title={t(locale, 'header.newSession')}
+          disabled={busy}
           onClick={() => send({ type: 'newSession' })}
         >
           <i className="codicon codicon-add" aria-hidden="true" />

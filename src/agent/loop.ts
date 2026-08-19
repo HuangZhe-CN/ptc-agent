@@ -40,6 +40,8 @@ export class AgentLoop {
   private finalText = ''
   private toolArgs = ''
   private toolCallId = ''
+  /** C1/C2：适配器经 replay_envelope 事件上报的协议原生回放信封（无信封时回退 providerReplay 伪造） */
+  private replayEnvelope: unknown
 
   constructor(private readonly d: LoopDeps) {}
 
@@ -138,6 +140,7 @@ export class AgentLoop {
 
   /** 重试（rateLimit/network/thinking 降级）前清空本轮流式累积，避免重放轮文本重复进入 completion/历史 */
   private resetRoundStreaming(): void {
+    this.clearCompletionEvent()
     this.pendingTurn = undefined
     this.thoughtId = undefined
     this.thoughtStartedAt = undefined
@@ -148,6 +151,15 @@ export class AgentLoop {
     this.finalText = ''
     this.toolArgs = ''
     this.toolCallId = ''
+    this.replayEnvelope = undefined
+  }
+
+  /** I5：撤下本轮流式过程误建/半程的 completion 气泡（中间轮 preamble 不是最终总结；重试失败轮 partial 同理） */
+  private clearCompletionEvent(): void {
+    if (this.completionId === undefined) return
+    this.d.emit([{ op: 'remove', id: this.completionId }])
+    this.completionId = undefined
+    this.completionText = ''
   }
 
   private consume(ev: StreamEvent): void {
@@ -186,6 +198,9 @@ export class AgentLoop {
         this.toolArgs += ev.argsDelta
         if (!this.toolCallId) this.toolCallId = `call_${d.newEventId()}`
         break
+      case 'replay_envelope':
+        this.replayEnvelope = ev.envelope
+        break
       case 'message_done': {
         if (this.thoughtId) d.emit([{ op: 'patch', id: this.thoughtId, patch: { status: 'done', durationMs: Date.now() - (this.thoughtStartedAt ?? Date.now()) } as never }])
         if (ev.stopReason === 'tool_use') {
@@ -199,9 +214,10 @@ export class AgentLoop {
             ...(this.turnThinking ? { thinking: this.turnThinking } : {}),
             text: this.workingText,
             toolCall: { callId: this.toolCallId || `call_${Date.now()}`, name: 'run_code', args },
-            replay: this.providerReplay(args),
+            replay: this.replayEnvelope ?? this.providerReplay(args),
           }
-          // 重置本轮流式累积（下一轮 thought 重开新事件；finalText 只保留最终轮文本）
+          // 重置本轮流式累积（下一轮 thought 重开新事件；finalText 只保留最终轮文本；completion 气泡撤下——I5）
+          this.clearCompletionEvent()
           this.thoughtId = undefined
           this.thoughtStartedAt = undefined
           this.turnThinking = undefined
@@ -209,6 +225,7 @@ export class AgentLoop {
           this.finalText = ''
           this.toolArgs = ''
           this.toolCallId = ''
+          this.replayEnvelope = undefined
         }
         break
       }
@@ -245,7 +262,9 @@ export class AgentLoop {
     const pool = new DispatchPool(d.tools, toolCtx, {
       maxParallel: 10,
       onEvent: (e: DispatchEvent): void => {
-        const key = (e.args ?? null) as object | null
+        // M1：args 可能为原始值（程序传了字符串等）——WeakMap key 仅接受对象，先 typeof 判定
+        const raw = e.args ?? null
+        const key = raw !== null && typeof raw === 'object' ? raw : null
         let id = key !== null ? dispatchIds.get(key) : undefined
         if (!id) {
           id = d.newEventId()

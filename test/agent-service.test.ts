@@ -63,4 +63,50 @@ describe('AgentService', () => {
     const lastQueue = [...after].reverse().find(o => o.op === 'queue') as unknown as { queue: unknown[] }
     expect(lastQueue.queue).toEqual([])
   })
+
+  it('I3：运行中 newSession/openSession 被守卫拒绝（不切换、不清时间线）；结束后恢复可用', async () => {
+    const sent: HostMessage[] = []
+    const listeners: Array<(m: unknown) => void> = []
+    const disposable = { dispose: () => undefined }
+    const target: PostTarget = {
+      postMessage: async (m: unknown) => { sent.push(m as HostMessage); return true },
+      onDidReceiveMessage: (l: (m: unknown) => void) => { listeners.push(l); return disposable },
+      onDidDispose: (_cb: () => void) => disposable,
+    }
+    const bridge = new WebviewBridge(target)
+    bridge.attach(target)
+    const api = {
+      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs', envLanguage: () => 'en',
+      fs: { readDir: async () => [], readFile: async () => { throw new Error('nf') }, appendFile: async () => {}, mkdir: async () => {}, writeFile: async () => {}, deleteFile: async () => {} },
+      openDiff: async () => {},
+    }
+    const svc = new AgentService({ config: new ConfigStore(memorySecrets(), memoryMemento()), api: api as never, bridge, workerPath: 'x' })
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [{ id: 'p1', label: 'P', protocol: 'openai', baseUrl: 'https://x', models: [{ id: 'm1', label: 'm1', supportsThinking: false }] }], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+
+    // 挂起一轮提交（phase=running 期间发起切换）
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    svc.loopFactory = () => gate.then(() => 'completed')
+    const turn = svc.handleWebviewMessage({ type: 'submit', text: 'first' })
+    await new Promise(r => setTimeout(r, 20))   // 等 runTurn 建立隐式会话并进入 running
+    await svc.bootSnapshot()
+    const runningSid = svc.getLastSnapshotForTest()!.sessionId
+    expect(runningSid).toBeTruthy()
+
+    const sentBefore = sent.length
+    // 运行中：newSession 与 openSession 均拒绝——无 clear、无新 snapshot（sessionId 不变）
+    await svc.handleWebviewMessage({ type: 'newSession' })
+    await svc.handleWebviewMessage({ type: 'openSession', sessionId: 'other-session' })
+    expect(sent.length).toBe(sentBefore)
+    await svc.bootSnapshot()
+    expect(svc.getLastSnapshotForTest()!.sessionId).toBe(runningSid)
+
+    release()
+    await turn
+    // 结束后：newSession 生效——切换到新会话（clear 归约 + 新 sessionId）
+    await svc.handleWebviewMessage({ type: 'newSession' })
+    const finalState = svc.getLastSnapshotForTest()!
+    expect(finalState.sessionId).not.toBe(runningSid)
+    expect(finalState.events).toEqual([])
+  })
 })

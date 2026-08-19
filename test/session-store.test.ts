@@ -29,4 +29,34 @@ describe('SessionStore', () => {
     expect(SessionStore.titleOf('做一个非常长的任务标题'.repeat(10))).toHaveLength(48)
     expect(SessionStore.titleOf('a\nb')).toBe('a')
   })
+  it('I4：torn/corrupt 行逐条跳过——好行仍可回放，单个坏行不瘫痪', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ptc-sess-'))
+    const store = new SessionStore(root, deps)
+    // 直接手工拼接：好 meta 行 + 撕裂半行（进程中断写穿） + 好 ops 行 + 非 JSON 行 + JSON 但非记录行
+    await deps.mkdir(root)
+    const torn = [
+      JSON.stringify({ kind: 'meta', meta: { sessionId: 's1', title: 'T', createdAt: 1, providerId: 'p', modelId: 'm' } }),
+      '{"kind":"ops","ops":[{"op":"title","ti',   // torn：进程写入中断的半行
+      JSON.stringify({ kind: 'history', message: { role: 'user', text: 'hi' } }),
+      'not-json-at-all',
+      '"just a string"',
+      'null',
+    ].join('\n') + '\n'
+    await deps.appendFile(`${root}/s1.jsonl`, torn)
+    const records = await store.load('s1')
+    expect(records.map(r => r.kind)).toEqual(['meta', 'history'])
+    const replayed = store.replayToState(records, 'en')
+    expect(replayed.history).toEqual([{ role: 'user', text: 'hi' }])
+  })
+  it('I4：list 单文件失败隔离——坏会话文件不拖垮列表；load 读取失败返回 []', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ptc-sess-'))
+    const store = new SessionStore(root, deps)
+    await store.append('good', { kind: 'meta', meta: { sessionId: 'good', title: 'Good', createdAt: 2, providerId: 'p', modelId: 'm' } })
+    await deps.mkdir(root)
+    // 坏文件：仅一行撕裂 meta（load 后无 meta 记录 → 不入列表，但 list 不抛）
+    await deps.appendFile(`${root}/bad.jsonl`, '{"kind":"meta","meta":{"sessionId":"bad","tit')
+    const list = await store.list()
+    expect(list.map(m => m.sessionId)).toEqual(['good'])
+    expect(await store.load('missing')).toEqual([])
+  })
 })

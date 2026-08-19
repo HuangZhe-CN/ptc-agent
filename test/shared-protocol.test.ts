@@ -18,4 +18,14 @@ describe('applyUiOps', () => {
     let s = applyUiOps(initialWebviewState('en'), [{ op: 'append', event: ev('t1', {}) }, { op: 'clear' }])
     expect(s.events).toHaveLength(0)
   })
+  it('I5：remove 按 id 移除单个事件（其余保留；未知 id 无害）', () => {
+    let s = initialWebviewState('en')
+    s = applyUiOps(s, [
+      { op: 'append', event: ev('t1', {}) },
+      { op: 'append', event: ev('c1', { type: 'completion', markdown: 'par' } as never) },
+      { op: 'append', event: ev('t2', {}) },
+    ])
+    s = applyUiOps(s, [{ op: 'remove', id: 'c1' }, { op: 'remove', id: 'nope' }])
+    expect(s.events.map(e => e.id)).toEqual(['t1', 't2'])
+  })
 })
