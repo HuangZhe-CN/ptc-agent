@@ -66,7 +66,7 @@ vscode-ptc-agent/
 ├─ package.json / esbuild.js / vite.config.ts
 ```
 
-构建：extension host 用 esbuild bundle；webview 用 Vite；`vsce` 打包。
+构建：extension host 用 esbuild bundle；webview 用 Vite；`vsce` 打包。`engines.vscode: ^1.100`（该版本起 extension host 运行 Node 22，`stripTypeScriptTypes` 可用；更旧主机走 §4 的纯 JS 降级路径）。
 
 ## 3. Agent Loop（PTC）
 
