@@ -1,0 +1,236 @@
+/* ============================================================
+   review.css — Task 23：完成态 files changed 汇总卡（§10.3）+
+   Review Inline Panel 文件列表/反馈区（§13.2）+ ReviewActionBar（底部 sticky bar）。
+   口径同 T21/T22：几何 = capture px × var(--scale)（382w 参考 = capture × 0.5）；
+   文字/图标/热区不随 scale 缩放；颜色只用 --agent-* 三层 token（禁止硬编码 hex）。
+   本文件由 ReviewPanel.tsx / ReviewActionBar.tsx / CompletionEvent.tsx import
+   （tokens.css/i18n.ts 受并行代理约束不可改）。
+   ============================================================ */
+
+/* ---------- 进入动效（§15：140–180ms opacity + translateY，禁止 overshoot） ---------- */
+@keyframes reviewIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================================
+   §10.3 files changed 汇总卡（完成回复正文下方）
+   `5 files changed +2565 -0 >` + 右侧 Review 按钮，用于进入审阅。
+   ============================================================ */
+.filesChangedCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: calc(var(--scale) * 14px);          /* 与正文保持自然 vertical rhythm（§13.1） */
+  padding: calc(var(--scale) * 6px) calc(var(--scale) * 8px) calc(var(--scale) * 6px) calc(var(--scale) * 12px);
+  border: 1px solid var(--agent-popover-border);  /* 极淡边框（§10.3） */
+  border-radius: calc(var(--scale) * 20px);       /* 大圆角（§10.3） */
+  background: transparent;
+  animation: reviewIn 160ms ease-out;
+  min-width: 0;
+}
+.filesChangedSummary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.filesChangedSummary:hover { background: var(--agent-hover-bg); }
+.filesChangedSummary:focus-visible { outline: 1px solid var(--agent-focus); outline-offset: 1px; }
+.filesChangedSummary .codicon { font-size: 14px; flex: none; }
+.filesChangedLabel {
+  color: var(--agent-fg-2);
+  white-space: nowrap;
+}
+.filesChangedChevron { color: var(--agent-fg-2); }
+
+/* diff 计数（汇总卡与 ReviewPanel 行共用）：tabular-nums 绿 +/红 -（§13.2/§17.1） */
+.reviewDiff {
+  display: inline-flex;
+  gap: 5px;
+  flex: none;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;             /* 计数变化不挤压相邻列（§17.1） */
+}
+.reviewDiffAdd { color: var(--agent-add); }
+.reviewDiffDel { color: var(--agent-delete); }
+
+/* ============================================================
+   §13.2 Review Inline Panel（mainScroll 内容）
+   文件行：新增/修改 glyph + +N -N + filename(semibold) + path(muted ellipsis)
+   ============================================================ */
+.reviewPanel {
+  margin: calc(var(--scale) * 6px) 0 calc(var(--scale) * 24px);
+  animation: reviewIn 160ms ease-out;
+  min-width: 0;
+}
+.reviewFileList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;                                       /* 行间几乎无分隔线（§11 队列同款语法） */
+}
+.reviewFileRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  width: 100%;
+  padding: 1px 4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.reviewFileRow:hover { background: var(--agent-hover-bg); }
+.reviewFileRow:focus-visible { outline: 1px solid var(--agent-focus); outline-offset: 0; }
+.reviewFileGlyph {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;                                    /* 固定 slot：宽度差异不挤压 filename（§17.1） */
+  height: 16px;
+  color: var(--agent-icon);
+}
+.reviewFileGlyph .codicon { font-size: 14px; }
+.reviewFileGlyph.isNew { color: var(--agent-add); } /* 新增文件 codicon-add 绿；修改 codicon-file */
+.reviewFileName {
+  flex: none;
+  color: var(--agent-fg);
+  font-weight: 600;                               /* filename semibold（§13.2） */
+  white-space: nowrap;
+}
+.reviewFilePath {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--agent-muted);                      /* path muted ellipsis（§13.2） */
+  font-size: 12.5px;
+}
+.reviewEmpty {
+  padding: 4px;
+  color: var(--agent-muted);
+  font-size: 12.5px;
+}
+
+/* 反馈区（§13.2：copy / thumbs up / thumbs down，右对齐、低对比，纯 UI） */
+.reviewFeedback {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-top: 6px;
+}
+.reviewFeedbackBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--agent-muted);                      /* 低对比 */
+  cursor: pointer;
+}
+.reviewFeedbackBtn .codicon { font-size: 14px; }
+.reviewFeedbackBtn:hover {
+  background: var(--agent-toolbar-hover);
+  color: var(--agent-fg-2);
+}
+.reviewFeedbackBtn:focus-visible { outline: 1px solid var(--agent-focus); outline-offset: 1px; }
+
+/* ============================================================
+   §13.2 ReviewActionBar（reviewMode 的 sticky 底部 bar）
+   AgentView 中渲染于 agentScroll 与 agentDock 之间（grid 独立行）——
+   不在滚动容器内，天然 sticky，视觉上紧贴 Composer 上方，像第二层 Dock。
+   ============================================================ */
+.reviewActionBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 calc(var(--scale) * 16px) calc(var(--scale) * 6px);
+  background: var(--agent-bg);
+  animation: reviewIn 160ms ease-out;
+  min-width: 0;
+}
+.reviewCountTitle {
+  color: var(--agent-fg);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.reviewBarSpacer { flex: 1 1 auto; }
+
+/* Reject all：secondary token 轻按钮 */
+.reviewRejectAll {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 14px;
+  border: none;
+  border-radius: calc(var(--scale) * 12px);       /* 6px @382w——radius 小于 composer（13px） */
+  background: var(--agent-secondary-bg);
+  color: var(--agent-secondary-fg);
+  font-family: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  flex: none;
+  transition: background-color 100ms ease;
+}
+.reviewRejectAll:hover { background: var(--agent-secondary-hover); }
+
+/* Accept all：primary 实心矩形按钮（白字），radius 小于主 Composer（§13.2） */
+.reviewAcceptAll {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 16px;
+  border: none;
+  border-radius: calc(var(--scale) * 12px);
+  background: var(--agent-primary-bg);
+  color: var(--agent-primary-fg);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  flex: none;
+  transition: background-color 100ms ease;
+}
+.reviewAcceptAll:hover { background: var(--agent-primary-hover); }
+.reviewRejectAll:focus-visible,
+.reviewAcceptAll:focus-visible { outline: 1px solid var(--agent-focus); outline-offset: 1px; }
+
+/* ---------- High Contrast 补边框（§3.5/§20.2：不能只靠底色差表达层级） ---------- */
+body.vscode-high-contrast .filesChangedCard,
+body.vscode-high-contrast .reviewRejectAll,
+body.vscode-high-contrast .reviewAcceptAll,
+body.vscode-high-contrast-light .filesChangedCard,
+body.vscode-high-contrast-light .reviewRejectAll,
+body.vscode-high-contrast-light .reviewAcceptAll {
+  border: 1px solid var(--agent-contrast-border);
+}
