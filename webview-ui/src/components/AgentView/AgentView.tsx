@@ -1,18 +1,73 @@
-import React from 'react'
+import React, { useEffect, useRef } from 'react'
+import { useAgentStore } from '../../store'
+import { t } from '../../i18n'
+import { AgentHeader } from '../Header/AgentHeader'
+import { Composer } from '../Composer/Composer'
+import { Timeline } from '../Timeline/Timeline'
+
+/** 【设计稿】§0.1：录屏坐标系 764×1314 capture px，等比基准宽 */
+const DESIGN_WIDTH = 764
 
 /**
- * Task 20 最小骨架：agentView 三层结构（Header / Scroll / Dock），
- * 对应 tokens.css 的 grid-template-rows: auto minmax(0,1fr) auto。
- * Header/Composer/Timeline 内容由 Task 21+ 填充。
+ * Task 21：三层骨架（设计稿 §2.2）
+ *   header (fixed) + mainScroll (minmax(0,1fr)) + bottomDock (content-sized)
+ * --scale 由 ResizeObserver 写入 root（§2.3：scale = W/764，clamp 0.5–1），
+ * 所有几何以「设计稿 capture px × --scale」换算；文字/图标/热区不随 scale 缩放。
  */
 export function AgentView(): JSX.Element {
+  const ref = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const apply = (width: number): void => {
+      const scale = Math.min(1, Math.max(0.5, width / DESIGN_WIDTH))
+      document.documentElement.style.setProperty('--scale', scale.toFixed(4))
+    }
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) apply(entry.contentRect.width)
+    })
+    ro.observe(el)
+    apply(el.getBoundingClientRect().width)
+    return () => ro.disconnect()
+  }, [])
+
   return (
-    <section className="agentView">
-      <header className="agentHeader" />
-      <div className="agentScroll">
-        <div className="timeline" />
-      </div>
-      <div className="agentDock" />
+    <section className="agentView" ref={ref}>
+      <AgentHeader />
+      <main className="agentScroll">
+        <Timeline />
+      </main>
+      <footer className="agentDock">
+        <UtilityRail />
+        <Composer />
+      </footer>
     </section>
+  )
+}
+
+/** 设计稿 §12.3：Composer 上方的 utility rail——左 4 图标 + 有变更时的 Review Changes */
+function UtilityRail(): JSX.Element {
+  const changes = useAgentStore(s => s.changes)
+  const send = useAgentStore(s => s.send)
+  const locale = useAgentStore(s => s.locale)
+  return (
+    <div className="utilityRail">
+      <span className="railIcon codicon codicon-files" aria-hidden="true" />
+      <span className="railIcon codicon codicon-terminal" aria-hidden="true" />
+      <span className="railIcon codicon codicon-folder" aria-hidden="true" />
+      <span className="railIcon codicon codicon-browser" aria-hidden="true" />
+      <span className="railSpacer" />
+      {changes.length > 0 && (
+        <button
+          type="button"
+          className="reviewButton"
+          onClick={() => send({ type: 'reviewFile', path: changes[0].path })}
+        >
+          <i className="codicon codicon-diff" aria-hidden="true" />
+          {t(locale, 'rail.reviewChanges')}
+        </button>
+      )}
+    </div>
   )
 }

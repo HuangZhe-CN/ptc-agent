@@ -157,3 +157,240 @@ code, .codePill { font-family: var(--vscode-editor-font-family, monospace); font
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 50ms !important; animation-duration: 50ms !important; transform: none !important; }
 }
+
+/* ============================================================
+   Task 21 追加：Header / UtilityRail / Composer / ModelTrigger
+   几何来源【设计稿】§02/§06/§07/§12/§20 + 附录A（capture px 基准 764 宽）。
+   等比换算：CSS px = capture px × var(--scale)（scale=容器宽/764，clamp 0.5–1，
+   由 AgentView 的 ResizeObserver 写入）；文字/图标/热区不随 scale 缩放（§2.3）。
+   ============================================================ */
+
+:root {
+  --scale: 0.5; /* ResizeObserver 接管前的保守初值（382w 参考即 0.5） */
+}
+
+/* ---------- Header（§06：高 64 capture / 382w 32；左内边距 15 capture） ---------- */
+.agentHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: calc(var(--scale) * 64px);
+  padding-left: calc(var(--scale) * 15px);
+  padding-right: calc(var(--scale) * 8px);
+  background: var(--agent-bg);          /* 与主背景同色，无独立卡片 */
+  min-width: 0;
+}
+.headerTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;                  /* 单行 ellipsis */
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--agent-fg);
+}
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+/* 通用图标按钮（§05：16px glyph / 28px 热区；§6.1 hover 圆底、无按压跳动） */
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--agent-icon);
+  cursor: pointer;
+}
+.iconButton .codicon { font-size: 16px; }
+.iconButton:hover { background: var(--agent-toolbar-hover); }
+.iconButton:active { transform: translateY(0); }
+/* close 不用红底——与其他 header 图标同 token（§6.1/§05） */
+
+/* ---------- bottomDock / UtilityRail（§2.1 底部 inset 16/14；§12.3 rail 距 composer 16–24） ---------- */
+.agentDock {
+  padding: 0 calc(var(--scale) * 16px) calc(var(--scale) * 20px);
+}
+.utilityRail {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  padding: 0 calc(var(--scale) * 4px);
+  margin-bottom: calc(var(--scale) * 18px);   /* rail ↔ composer 间距 */
+}
+.railIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;                                /* §05 rail 热区 24–28 */
+  height: 24px;
+  border-radius: 6px;
+  color: var(--agent-icon);
+}
+.railIcon .codicon { font-size: 16px; }
+.railIcon:hover { background: var(--agent-toolbar-hover); }
+.railSpacer { flex: 1 1 auto; }
+
+/* Review Changes 轻按钮（§12.3：capture w≈170 h≈35 → 382w ≈85/17.5，取可用热区下限） */
+.reviewButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: var(--agent-secondary-bg);
+  color: var(--agent-secondary-fg);
+  font-size: 12px;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.reviewButton:hover { background: var(--agent-secondary-hover); }
+.reviewButton .codicon { font-size: 14px; }
+
+/* ---------- Composer（§12.1：高 118–120 / radius 22–26 / 文本 inset ≈18 capture） ---------- */
+.composer {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(var(--scale) * 120px);       /* 382w = 60px */
+  border-radius: calc(var(--scale) * 26px);     /* 382w = 13px */
+}
+.composerInput {
+  flex: 1 1 auto;
+  min-height: calc(var(--scale) * 44px);
+  padding: calc(var(--scale) * 14px) calc(var(--scale) * 18px) calc(var(--scale) * 6px);
+  border: none;
+  outline: none;                                /* focus 由 .composer:focus-within 承担 */
+  background: transparent;
+  color: var(--agent-input-fg);
+  font-family: inherit;
+  font-size: 13px;                              /* §04：禁止 16px web 默认输入字号 */
+  line-height: 1.55;
+  resize: none;
+}
+.composerInput::placeholder { color: var(--agent-placeholder); }
+
+.composerActions {
+  display: flex;
+  align-items: center;                          /* baseline 对齐（§07.1） */
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 calc(var(--scale) * 8px) calc(var(--scale) * 12px);
+}
+.composerLeft {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--scale) * 12px);               /* §07.1 控件间距 12–18 capture */
+  min-width: 0;
+}
+
+/* ModelTrigger（§07.1：模型名 + quality + chevron；hover=list.hoverBackground §20） */
+.modelTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--agent-fg-2);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+.modelTrigger:hover { background: var(--agent-hover-bg); }
+.modelLabel {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--agent-fg);
+}
+.modelQuality { color: var(--agent-fg-2); }
+.modelTrigger .codicon { font-size: 14px; color: var(--agent-fg-2); }
+
+/* 主按钮 send↔stop（§12.2 状态机；§20.1 热区 36–40；§15 cross-fade 80–120ms 外圆不变） */
+.primaryAction {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--agent-primary-bg);
+  color: var(--agent-primary-fg);
+  cursor: pointer;
+  flex: none;
+  transition: background-color 100ms ease;
+}
+.primaryAction:hover { background: var(--agent-primary-hover); }
+.primaryAction:disabled {
+  opacity: 0.55;                                /* §12.2 completed 无输入 → 低对比 disabled */
+  cursor: default;
+}
+.primaryAction:disabled:hover { background: var(--agent-primary-bg); }
+.primaryAction.running {
+  background: var(--agent-secondary-bg);        /* §12.2 红色 Stop 方块置于浅色圆形底 */
+}
+.primaryAction.running:hover { background: var(--agent-secondary-hover); }
+.primaryGlyph {
+  position: absolute;
+  font-size: 16px;
+  line-height: 1;
+  transition: opacity 100ms ease;               /* §15：80–120ms cross-fade */
+}
+.primaryAction .codicon-debug-stop { opacity: 0; }
+.primaryAction.running .codicon-send { opacity: 0; }
+.primaryAction.running .codicon-debug-stop { opacity: 1; }
+.primaryAction:focus-visible {
+  outline: 1px solid var(--agent-focus);
+  outline-offset: 1px;
+}
+
+/* ---------- Timeline 最小占位（Task 22 重写；§2.1 主内容 inset 28/25 capture） ---------- */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-event);
+  padding: calc(var(--scale) * 26px) calc(var(--scale) * 25px) calc(var(--scale) * 40px) calc(var(--scale) * 28px);
+}
+.timelineRow {
+  font-size: 13px;
+  color: var(--agent-fg-2);
+  overflow-wrap: anywhere;
+}
+.timelineRow .timelineTag {
+  font-weight: 600;
+  color: var(--agent-fg);
+  margin-right: 6px;
+}
+.timelineRow[data-type='error'] .timelineTag { color: var(--agent-error); }
+
+/* ---------- High Contrast 补边框（§3.5/§20.2：不能只靠底色差表达层级） ---------- */
+body.vscode-high-contrast .reviewButton,
+body.vscode-high-contrast .primaryAction,
+body.vscode-high-contrast-light .reviewButton,
+body.vscode-high-contrast-light .primaryAction {
+  border: 1px solid var(--agent-contrast-border);
+}
+body.vscode-high-contrast .iconButton:hover,
+body.vscode-high-contrast-light .iconButton:hover {
+  outline: 1px solid var(--agent-contrast-border);
+}
