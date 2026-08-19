@@ -1,0 +1,71 @@
+import { describe, it, expect } from 'vitest'
+import { openaiAdapter, buildOpenAiBody } from '../src/protocol/openai'
+import type { StreamRequest } from '../src/protocol/types'
+
+const sse = (...events: string[]) => new ReadableStream<Uint8Array>({
+  start(c) { const e = new TextEncoder(); for (const ev of events) c.enqueue(e.encode(ev)); c.close() },
+})
+const baseReq = (history: StreamRequest['history']): StreamRequest => ({
+  system: 'SYS', history,
+  provider: { info: { id: 'p', label: 'p', protocol: 'openai', baseUrl: 'https://x/v1', models: [{ id: 'm', label: 'm', supportsThinking: true }] }, apiKey: 'K', modelId: 'm', quality: 'high' },
+  signal: new AbortController().signal,
+})
+const fakeFetch = (body: ReadableStream<Uint8Array>, status = 200) => async () =>
+  ({ ok: status < 400, status, headers: { get: () => null }, body } as unknown as Response)
+
+describe('buildOpenAiBody', () => {
+  it('system 首位、run_code 工具、reasoning_effort、include_usage、max_completion_tokens', () => {
+    const body = buildOpenAiBody(baseReq([])) as Record<string, any>
+    expect(body.messages[0]).toEqual({ role: 'system', content: 'SYS' })
+    expect(body.stream).toBe(true)
+    expect(body.stream_options).toEqual({ include_usage: true })
+    expect(body.max_completion_tokens).toBe(32768)
+    expect(body.reasoning_effort).toBe('high')
+    expect(body.tools[0].function.name).toBe('run_code')
+    expect(body.tools[0].function.parameters.required).toEqual(['code', 'description'])
+  })
+  it('assistant 轮回放 tool_calls 与 reasoning_content；tool 角色回传结果', () => {
+    const body = buildOpenAiBody(baseReq([
+      { role: 'assistant', turn: { thinking: 'TH', text: '', toolCall: { callId: 'c1', name: 'run_code', args: { code: '1', description: 'd' } }, replay: { reasoning_content: 'TH' } } },
+      { role: 'toolResult', callId: 'c1', content: '{"value":1}', isError: false },
+    ])) as Record<string, any>
+    const asst = body.messages[1]   // messages[0] 是 system（见上一测试）
+    expect(asst.role).toBe('assistant')
+    expect(asst.reasoning_content).toBe('TH')
+    expect(asst.tool_calls[0]).toEqual({ id: 'c1', type: 'function', function: { name: 'run_code', arguments: '{"code":"1","description":"d"}' } })
+    expect(body.messages[2]).toEqual({ role: 'tool', tool_call_id: 'c1', content: '{"value":1}' })
+  })
+})
+
+describe('openaiAdapter.stream', () => {
+  it('文本/思考/工具增量与 message_done', async () => {
+    const events: any[] = []
+    const iter = openaiAdapter.stream(baseReq([]), fakeFetch(sse(
+      'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n',
+      'data: {"choices":[{"delta":{"reasoning_content":"think"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"run_code","arguments":"{\\"code\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"return 1\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":7}}\n\n',
+      'data: [DONE]\n\n')))
+    for await (const e of iter) events.push(e)
+    expect(events).toEqual([
+      { type: 'thinking_delta', text: 'think' },
+      { type: 'text_delta', text: 'Hi' },
+      { type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":' },
+      { type: 'tool_call_delta', name: 'run_code', argsDelta: '"return 1"}' },
+      { type: 'message_done', stopReason: 'tool_use', usage: { input: 5, output: 7 } },
+    ])
+  })
+  it('delta.reasoning 字段（vLLM 系）也归一为 thinking_delta', async () => {
+    const events: any[] = []
+    for await (const e of openaiAdapter.stream(baseReq([]), fakeFetch(sse('data: {"choices":[{"delta":{"reasoning":"r"}}]}\n\n')))) events.push(e)
+    expect(events[0]).toEqual({ type: 'thinking_delta', text: 'r' })
+  })
+  it('HTTP 401 → auth stream_error', async () => {
+    const events: any[] = []
+    for await (const e of openaiAdapter.stream(baseReq([]), fakeFetch(sse(), 401))) events.push(e)
+    expect(events[0].type).toBe('stream_error'); expect(events[0].kind).toBe('auth')
+  })
+})
