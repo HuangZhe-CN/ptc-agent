@@ -88,6 +88,10 @@ describe('AgentLoop', () => {
     // thought markdown 流式追加
     const markdowns = ops.filter(o => o.op === 'patch').map(o => (o as { patch: { markdown?: string } }).patch.markdown)
     expect(markdowns).toContain('let me think')
+    // thought 折叠时固化 durationMs（重放/快照恢复不再用 Date.now()-startedAt 墙钟差）
+    const durationPatches = ops.filter(o => o.op === 'patch' && (o as { patch: { durationMs?: number } }).patch.durationMs !== undefined)
+    expect(durationPatches).toHaveLength(1)
+    expect(durationPatches[0]).toMatchObject({ op: 'patch', patch: { status: 'done', durationMs: expect.any(Number) } })
   })
 
   it('流错误 auth → error 事件 + phase error，不重试', async () => {

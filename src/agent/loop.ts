@@ -33,6 +33,7 @@ export class AgentLoop {
   private pendingTurn: AssistantTurn | undefined
   private turnThinking: string | undefined
   private thoughtId: string | undefined
+  private thoughtStartedAt: number | undefined
   private workingText = ''
   private completionId: string | undefined
   private completionText = ''
@@ -139,6 +140,7 @@ export class AgentLoop {
   private resetRoundStreaming(): void {
     this.pendingTurn = undefined
     this.thoughtId = undefined
+    this.thoughtStartedAt = undefined
     this.turnThinking = undefined
     this.workingText = ''
     this.completionId = undefined
@@ -154,8 +156,10 @@ export class AgentLoop {
       case 'thinking_delta': {
         if (!this.thoughtId) {
           this.thoughtId = d.newEventId()
+          const startedAt = Date.now()
+          this.thoughtStartedAt = startedAt
           this.turnThinking = ''
-          d.emit([{ op: 'append', event: { id: this.thoughtId, ts: Date.now(), type: 'thought', status: 'running', startedAt: Date.now(), markdown: '', working: '' } }])
+          d.emit([{ op: 'append', event: { id: this.thoughtId, ts: Date.now(), type: 'thought', status: 'running', startedAt, markdown: '', working: '' } }])
         }
         this.turnThinking = (this.turnThinking ?? '') + ev.text
         d.emit([{ op: 'patch', id: this.thoughtId, patch: { markdown: this.turnThinking } as never }])
@@ -183,7 +187,7 @@ export class AgentLoop {
         if (!this.toolCallId) this.toolCallId = `call_${d.newEventId()}`
         break
       case 'message_done': {
-        if (this.thoughtId) d.emit([{ op: 'patch', id: this.thoughtId, patch: { status: 'done' } as never }])
+        if (this.thoughtId) d.emit([{ op: 'patch', id: this.thoughtId, patch: { status: 'done', durationMs: Date.now() - (this.thoughtStartedAt ?? Date.now()) } as never }])
         if (ev.stopReason === 'tool_use') {
           let args: { code: string; description: string }
           try {
@@ -199,6 +203,7 @@ export class AgentLoop {
           }
           // 重置本轮流式累积（下一轮 thought 重开新事件；finalText 只保留最终轮文本）
           this.thoughtId = undefined
+          this.thoughtStartedAt = undefined
           this.turnThinking = undefined
           this.workingText = ''
           this.finalText = ''

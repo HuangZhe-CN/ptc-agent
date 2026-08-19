@@ -14,7 +14,7 @@ export interface TimelineEventBase { id: string; ts: number }
 export type TimelineEvent =
   | TimelineEventBase & { type: 'explore'; status: 'running' | 'done'; count: number; targets: string[] }
   | TimelineEventBase & { type: 'edit'; file: string; fileKind: FileKind; add: number; del: number }
-  | TimelineEventBase & { type: 'thought'; status: 'running' | 'done'; startedAt: number; markdown: string; working: string }
+  | TimelineEventBase & { type: 'thought'; status: 'running' | 'done'; startedAt: number; durationMs?: number; markdown: string; working: string }
   | TimelineEventBase & { type: 'run'; command: string; status: 'running' | 'done' | 'error'; outputTail: string }
   | TimelineEventBase & { type: 'completion'; markdown: string }
   | TimelineEventBase & { type: 'error'; message: string }

@@ -18,11 +18,13 @@ function readPrefs(): PersistedUi {
 /**
  * 计时标签（【设计稿】§09/§15）：
  * - "Thinking for Ns" 1Hz 更新，只重绘本标题节点（隔离为子组件，避免整行/整树重渲）；
- * - 无数字滚动动画；done 后冻结在最后一次 tick，即 "Thought for Ns" 的总时长。
+ * - 无数字滚动动画；done 后冻结：优先用 host 在 message_done 固化的 durationMs
+ *   （会话重放/快照恢复时避免 Date.now()-startedAt 的墙钟差），旧事件无该字段则回退最后 tick。
  */
-function ThoughtLabel({ status, startedAt, locale }: {
+function ThoughtLabel({ status, startedAt, durationMs, locale }: {
   status: 'running' | 'done'
   startedAt: number
+  durationMs?: number
   locale: string
 }): JSX.Element {
   const [now, setNow] = useState<number>(() => Date.now())
@@ -31,7 +33,9 @@ function ThoughtLabel({ status, startedAt, locale }: {
     const iv = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(iv)
   }, [status])
-  const seconds = Math.max(0, Math.round((now - startedAt) / 1000))
+  const seconds = status === 'done' && typeof durationMs === 'number'
+    ? Math.max(0, Math.round(durationMs / 1000))
+    : Math.max(0, Math.round((now - startedAt) / 1000))
   return (
     <>
       {t(locale, status === 'running' ? 'event.thought.thinking' : 'event.thought.thought', { n: seconds })}
@@ -75,7 +79,7 @@ export function ThoughtEvent({ event }: { event: ThoughtEv }): JSX.Element {
 
   return (
     <EventRow
-      label={<ThoughtLabel status={event.status} startedAt={event.startedAt} locale={locale} />}
+      label={<ThoughtLabel status={event.status} startedAt={event.startedAt} durationMs={event.durationMs} locale={locale} />}
       disclosure
       expanded={expanded}
       onToggle={toggle}
