@@ -36,14 +36,14 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "ptc-agent.container",
+          "id": "ptc-agent-container",
           "title": "PTC Agent",
           "icon": "media/container.svg"
         }
       ]
     },
     "views": {
-      "ptc-agent.container": [
+      "ptc-agent-container": [
         {
           "type": "webview",
           "id": "ptc-agent.view",

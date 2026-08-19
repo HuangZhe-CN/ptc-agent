@@ -11,6 +11,10 @@ dist/
 out/
 *.vsix
 
+# test-electron 运行产物
+.vscode-test/
+dist/test/
+
 # 依赖与缓存
 .pnpm-store/
 
