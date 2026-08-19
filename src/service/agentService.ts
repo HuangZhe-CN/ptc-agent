@@ -46,6 +46,7 @@ export class AgentService {
   private tracker: SnapshotTracker | null = null
   private history: HistoryMessage[] = []
   private idSeq = 0
+  private lastSnapshotState: WebviewState | null = null
 
   constructor(private readonly deps: AgentServiceDeps) {
     const ws = this.deps.api.workspaceFolders() ?? 'no-folder'
@@ -54,6 +55,9 @@ export class AgentService {
 
   /** 当前会话 tracker（extension 接线 reviewProvider 读取快照原文用）。 */
   get currentTracker(): SnapshotTracker | null { return this.tracker }
+
+  /** 只读测试钩子（Task 27 冒烟）：最近一次 bootSnapshot 构建的完整状态；null = 尚未 ready。 */
+  getLastSnapshotForTest(): WebviewState | null { return this.lastSnapshotState }
 
   private cwd(): string { return this.deps.api.workspaceFolders() ?? process.cwd() }
 
@@ -83,6 +87,7 @@ export class AgentService {
       providers, providerKeyed: keyed, active,
       hasSessions: (await this.store.list()).length > 0,
     }
+    this.lastSnapshotState = state
     this.deps.bridge.send({ type: 'snapshot', state })
   }
 

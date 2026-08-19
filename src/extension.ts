@@ -11,6 +11,8 @@ import type { SnapshotTracker } from './service/snapshot'
 export function activate(context: vscode.ExtensionContext): void {
   const workerPath = path.join(__dirname, 'worker.js')
   const serviceRef: { service: AgentService | null } = { service: null }
+  // Task 27 冒烟测试钩子（只读引用，生产无消费者）：src/test/suite 经 globalThis 取运行中的 service
+  ;(globalThis as { __ptcAgentServiceRef?: { service: AgentService | null } }).__ptcAgentServiceRef = serviceRef
   const wsRoot = (): string | undefined => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 
   const api: VscodeApi = {
@@ -48,7 +50,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     private readonly workerPath: string,
   ) {}
   public resolveWebviewView(view: vscode.WebviewView): void {
-    view.webview.options = { localResourceRoots: [this.context.extensionUri, vscode.Uri.joinPath(this.context.extensionUri, 'webview-ui/dist')] }
+    view.webview.options = { enableScripts: true, localResourceRoots: [this.context.extensionUri, vscode.Uri.joinPath(this.context.extensionUri, 'webview-ui/dist')] }
     const bridge = new WebviewBridge(view.webview)
     // Thenable → Promise 适配（SecretStorage/Memento 是 Thenable 返回面）
     const config = new ConfigStore(
