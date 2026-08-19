@@ -41,8 +41,9 @@ VS Code
      ConfigStore      SecretStorage（密钥）+ globalState（配置）
 ```
 
-- 单一 Webview View，注册进自定义 ActivityBar viewContainer；`retainContextWhenHidden: true` 保证侧栏切换时流式状态不丢。
-- 所有模型通信与工具执行都在 extension host；worker thread 由 extension host spawn。
+- 单一 Webview View，注册进自定义 ActivityBar viewContainer。
+- **Webview 生命周期（调研修正，2026-08）**：编程式 `registerWebviewViewProvider(id, provider, { webviewOptions: { retainContextWhenHidden: true } })`（Cline/Roo/Continue/Kilo 一致做法）；但**正确性不依赖 retain**——webview 每次 resolve/可见时执行 boot 握手（webview 发 `ready` → host 回推全量 state 快照），host→webview 消息在未就绪时入队（Goose 模式）；所有 host→webview 消息带单调 `seq`；`postMessage` 全部 try/catch + disposed 守卫（Roo #11313 教训）。webview 内禁用 localStorage（官方 out-of-scope），UI 状态走 `acquireVsCodeApi().setState`。
+- 所有模型通信与工具执行都在 extension host；worker thread 由 extension host spawn，**worker 以独立 esbuild entry 打包为 `dist/worker.js`，运行时 `new Worker(path.join(__dirname, 'worker.js'))`**（`new URL(import.meta.url)` 模式在 CJS 输出下有 esbuild 已知坑）。
 - 零运行时依赖（host 侧仅 Node 内置模块；webview 侧 React+zustand 打包）。
 
 ### 2.2 目录结构
@@ -66,7 +67,7 @@ vscode-ptc-agent/
 ├─ package.json / esbuild.js / vite.config.ts
 ```
 
-构建：extension host 用 esbuild bundle；webview 用 Vite；`vsce` 打包。`engines.vscode: ^1.100`（该版本起 extension host 运行 Node 22，`stripTypeScriptTypes` 可用；更旧主机走 §4 的纯 JS 降级路径）。
+构建：extension host 用 esbuild bundle（CJS、external `vscode`、worker 独立 entry）；webview 用 Vite（`dedupe:['react','react-dom']` 防 dual-React、固定产物名无 hash、`cssCodeSplit:false`）；`vsce` 打包。`engines.vscode: ^1.101.0`（该版本起 extension host 运行 Node 22.14，`stripTypeScriptTypes` 可用；2026-08 stable 为 1.133/Node 24.18）。Codicons 资源（codicon.css/ttf）拷贝进 webview 静态目录而非直接引用 node_modules，避免 vsce 打包问题。
 
 ## 3. Agent Loop（PTC）
 
@@ -186,10 +187,19 @@ type StreamEvent =
 | | OpenAI-compatible | Anthropic | Gemini |
 |---|---|---|---|
 | 端点 | `POST {base}/chat/completions` | `POST {base}/v1/messages` | `POST {base}/models/{m}:streamGenerateContent?alt=sse` |
-| 文本 | `delta.content` | `content_block_delta.text_delta` | `candidates[0].content.parts[].text` |
-| 思考 | `delta.reasoning_content` | `content_block_delta.thinking_delta` | `parts[].thought` |
-| 工具 | `tool_calls` 增量 | `input_json_delta` | `functionCall`（非流式参数） |
-| system | `messages[0]{role:'system'}` | `system` 字段 | `systemInstruction` |
+| 文本 | `delta.content` | `content_block_delta.text_delta` | `candidates[0].content.parts[].text`（无 `thought` 标记） |
+| 思考 | `delta.reasoning_content`（DeepSeek 系）或 `delta.reasoning`（vLLM 系）；OpenAI 官方无此字段——三字段兼容读取 | `content_block_delta.thinking_delta` | `parts[].text` 且 `thought:true` |
+| 工具 | `tool_calls` 按 `index` 增量拼装 `arguments` 字符串 | `content_block_delta.input_json_delta.partial_json` 拼装 | `parts[].functionCall.args` 为完整对象（非流式） |
+| system | `messages[0]{role:'system'}` | 顶层 `system` 字段（无 system 角色） | `systemInstruction`（仅文本） |
+
+调研核实的厂商分叉与强制规则（2026-08）：
+
+- **OpenAI 系**：`reasoning_effort` 按宽松字符串透传（官方枚举文档不一致）；token 上限用 `max_completion_tokens`（`max_tokens` 已弃用）；`stream_options:{include_usage:true}` 拿 usage。**DeepSeek 带 tools 时 assistant 历史必须原样回传 `reasoning_content`（否则 400）**；SiliconFlow 服务端自行剥离历史 thinking——统一"原样回传"对两者都安全。鉴权 `Authorization: Bearer`。
+- **Anthropic**：`max_tokens` 必填；`anthropic-version: 2023-06-01` 头；thinking 块（含 `signature`）与 `redacted_thinking` **必须原样按序回传**否则 400；工具结果为 user 消息内 `tool_result` 块（`tool_use_id` 关联，`is_error` 支持）。thinking 参数处于代际切换：manual `{"type":"enabled","budget_tokens"}` 在 Claude 4.6 弃用、4.7+ 返回 400，新式 `{"type":"adaptive"}`——适配器按"adaptive 优先，400 时降级 manual，再降级无 thinking"解析并按模型缓存结果。
+- **Gemini**：鉴权 `x-goog-api-key` 头；`functionResponse` 放 role:"user" 的 parts、`functionCall` 在 role:"model" 的 parts；**functionCall part 上的 `thoughtSignature` 必须原样带回下一轮**（缺失即 `MISSING_THOUGHT_SIGNATURE`）；quality 映射 `thinkingLevel`（Gemini 3+，旧模型 `thinkingBudget`，不支持 thinking 的模型报错——按模型 `supportsThinking` 标志决定是否发送）。
+- **内部历史模型**：会话锁定 provider，assistant 轮同时保存协议原生块（供适配器精确回放：Anthropic signature / Gemini thoughtSignature / DeepSeek reasoning_content）与解析后的事件视图（供 UI/日志）。
+- **quality（Low/Medium/High）映射**：openai→`reasoning_effort`；anthropic→thinking budget（1024/4096/16384，经上述解析链）；gemini→`thinkingLevel` LOW/MEDIUM/HIGH。
+- **SSE 代理坑**：VS Code `http.proxySupport`（默认 on）会接管扩展进程 fetch，代理场景 SSE 可能被缓冲/断流（continue#1147 实证）——reader 循环需防御 `TypeError: terminated`，归入 network 错误类走重试；README 注明可设 `http.proxySupport:"off"` 排障。
 
 默认 baseUrl：`https://api.openai.com/v1`（或 DeepSeek 等预设）、`https://api.anthropic.com`、`https://generativelanguage.googleapis.com/v1beta`。手写 fetch+SSE，~200 行/适配器，零 SDK。
 
@@ -209,9 +219,9 @@ type AgentConfig = { providerId:string; modelId:string; quality:'low'|'medium'|'
 
 ## 8. 会话持久化与 Review
 
-- **JSONL 追加日志**存 `globalStorage/sessions/<workspaceHash>/<sessionId>.jsonl`；重放恢复时间线与变更状态；Header history 列当前工作区历史会话；标题=首条 prompt 截断。
-- **快照**：会话内首次改某文件前，原文存 `globalStorage/snapshots/<sessionId>/<relPath>`。
-- **Review**：面板列文件 +N -N；点击 → `vscode.diff(快照, 当前)`（自定义 FileSystemProvider 暴露快照区）；Accept（全部/单文件）= 丢弃快照；Reject = 恢复原文；底部 "N Files With Changes" 实时计数。
+- **JSONL 追加日志**存 `globalStorageUri/sessions/<workspaceHash>/`；重放恢复时间线与变更状态；Header history 列当前工作区历史会话；标题=首条 prompt 截断。
+- **快照**：会话内首次改某文件前，原文存 `globalStorageUri/snapshots/<sessionId>/<relPath>`。
+- **Review（调研修正）**：用 `workspace.registerTextDocumentContentProvider`（官方现行推荐，比 FileSystemProvider 简单）注册自定义 scheme（如 `ptc-snapshot:`），URI 中编码 sessionId+相对路径，provider 从快照区读内容；点击文件 → `vscode.commands.executeCommand('vscode.diff', snapshotUri, fileUri, title, {preserveFocus:true})`（Cline/Roo 同款模式）；Accept（全部/单文件）= 丢弃快照；Reject = 恢复原文；底部 "N Files With Changes" 实时计数。
 
 ## 9. 错误处理
 
