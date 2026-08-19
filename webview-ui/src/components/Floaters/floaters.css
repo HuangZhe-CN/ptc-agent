@@ -40,6 +40,16 @@
   from { opacity: 0; transform: translateX(-2px); }
   to   { opacity: 1; transform: translateX(0); }
 }
+/* 退出动画（§15 表 Popover 退出 90ms opacity；Task 26）——isClosing 由
+   ModelTrigger 延迟卸载期间挂上；reduced-motion 下 tokens.css 全局 50ms 降级 */
+@keyframes popoverOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+.modelPopover.isClosing {
+  animation: popoverOut 90ms ease-out forwards;
+  pointer-events: none;                       /* 退出期间不再接受交互 */
+}
 
 .modelPopover {
   position: absolute;
@@ -235,6 +245,16 @@
 @keyframes queueIn {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+/* 退出动画（§15 表 Queue panel 退出 120ms；Task 26）——队列清空时 QueuePanel
+   以 isClosing 延迟卸载播完再卸；reduced-motion 下 tokens.css 全局 50ms 降级 */
+@keyframes queueOut {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(6px); }
+}
+.queuePanel.isClosing {
+  animation: queueOut 120ms ease-out forwards;
+  pointer-events: none;                       /* 退出期间不再接受交互 */
 }
 
 .queuePanel {

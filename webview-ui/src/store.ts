@@ -10,11 +10,17 @@ import {
 /**
  * 本文件必须保持 node 可加载（test/webview-store.test.ts 依赖链）：
  * 禁止 import './api'（acquireVsCodeApi 在 node 下不存在）。
- * 发送通道由 main.tsx 通过 bindPost 注入；persistUi 为占位（Task 26 接 vscodeApi.setState）。
+ * 发送通道由 main.tsx 通过 bindPost 注入；UI 偏好持久化同理经 bindPersistUi
+ * 注入（写 vscodeApi.setState）——store 内不触碰 api 模块，读写通道同构。
  */
 type PostFn = (m: WebviewMessage) => void
 let postImpl: PostFn | null = null
 export function bindPost(fn: PostFn): void { postImpl = fn }
+
+type PersistUiFn = (ui: UiPrefs) => void
+let persistImpl: PersistUiFn | null = null
+/** main.tsx 注入持久化通道（vscodeApi.setState）；未注入时仅内存态（node/测试） */
+export function bindPersistUi(fn: PersistUiFn): void { persistImpl = fn }
 
 export interface UiPrefs {
   expandedThoughtIds: string[]
@@ -22,22 +28,33 @@ export interface UiPrefs {
   reviewOpen: boolean
 }
 
+export const initialUiPrefs: UiPrefs = { expandedThoughtIds: [], queueOpen: true, reviewOpen: false }
+
 interface AgentStore extends WebviewState {
+  /** webview 本地 UI 偏好（不进协议：snapshot/ops 不覆盖，见 applyHost） */
+  ui: UiPrefs
   /** 最近一次 rpc 结果（组件轮询/回调消费；Task 23+ 细化） */
   lastRpc?: Extract<HostMessage, { type: 'rpcResult' }>
   send(m: WebviewMessage): void
   applyHost(msg: HostMessage): void
-  persistUi(ui: UiPrefs): void
+  /** 统一 UI 偏好写入（Task 26 收口）：合并 → 更新内存态 → 经注入通道持久化 */
+  setUiPref(patch: Partial<UiPrefs>): void
 }
 
-export const useAgentStore = create<AgentStore>(set => ({
+export const useAgentStore = create<AgentStore>((set, get) => ({
   ...initialWebviewState('en'),
+  ui: initialUiPrefs,
   send: m => { if (postImpl) postImpl(m) },
   applyHost: msg => {
-    if (msg.type === 'snapshot') set(s => ({ ...msg.state, locale: s.locale }))
+    // snapshot/ops 均为协议态：只替换 WebviewState 字段，ui/locale 等 webview 本地态保留
+    if (msg.type === 'snapshot') set(s => ({ ...msg.state, locale: s.locale, ui: s.ui }))
     else if (msg.type === 'ops') set(s => ({ ...applyUiOps(s, msg.ops) }))
     // rpcResult 由调用处通过回调消费（组件用 pendingRpc map；简化：存最近结果）
     else if (msg.type === 'rpcResult') set({ lastRpc: msg })
   },
-  persistUi: _ui => { /* Task 26 接入 vscodeApi.setState（需经组件层访问 api.ts） */ },
+  setUiPref: patch => {
+    const ui = { ...get().ui, ...patch }
+    set({ ui })
+    if (persistImpl) { try { persistImpl(ui) } catch { /* host 不可达 */ } }
+  },
 }))

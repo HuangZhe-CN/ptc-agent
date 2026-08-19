@@ -26,10 +26,13 @@ const rowKey = (r: { providerId: string; modelId: string }): string => `${r.prov
  * （§7.3 translateY(-2px→0) + transform-origin=锚点侧，即 bottom）。
  * 键盘（§20 交互表）：Enter 打开（trigger 侧）；↑↓ 移动；→ 进入二级菜单；
  * ← / Esc 退回或关闭；选择/点击外部关闭后焦点返回 trigger（onClose(true)）。
+ * Task 26（§15 Popover 退出 90ms）：closing 时根节点挂 isClosing 播退出动画，
+ * 卸载时机由 ModelTrigger 延迟 90ms 控制（reduced-motion 下 tokens.css 全局降级）。
  */
-export function ModelPopover({ anchorRef, onClose }: {
+export function ModelPopover({ anchorRef, onClose, closing = false }: {
   anchorRef: RefObject<HTMLButtonElement | null>
   onClose: (refocus?: boolean) => void
+  closing?: boolean
 }): JSX.Element {
   const locale = useAgentStore(s => s.locale)
   const providers = useAgentStore(s => s.providers)
@@ -150,7 +153,7 @@ export function ModelPopover({ anchorRef, onClose }: {
   return (
     <div
       ref={rootRef}
-      className="modelPopover popover"
+      className={closing ? 'modelPopover popover isClosing' : 'modelPopover popover'}
       role="menu"
       aria-label={ft(locale, 'popover.title')}
       onKeyDown={onKeyDown}

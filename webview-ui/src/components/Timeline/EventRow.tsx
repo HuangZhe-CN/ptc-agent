@@ -40,7 +40,7 @@ export function EventRow(props: EventRowProps): JSX.Element {
       {diff != null && (
         <span className="eventDiff">
           <span className="diffAdd">+{diff.add}</span>
-          <span className="diffDel">-{diff.del}</span>
+          <span className="diffDelete">-{diff.del}</span>
         </span>
       )}
       {disclosure && <i className="codicon codicon-chevron-right eventChevron" aria-hidden="true" />}

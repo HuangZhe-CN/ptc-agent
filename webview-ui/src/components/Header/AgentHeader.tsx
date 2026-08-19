@@ -1,6 +1,7 @@
-import React from 'react'
+import React, { useRef, useState } from 'react'
 import { useAgentStore } from '../../store'
 import { t } from '../../i18n'
+import { HistoryDropdown } from './HistoryDropdown'
 
 /**
  * 设计稿 §06 Header：
@@ -9,11 +10,16 @@ import { t } from '../../i18n'
  * - 右四图标 ＋/history/more(layout)/close：16px glyph、28px 热区、hover=toolbar.hoverBackground
  *   圆底；close 不用红底；＋ → send({type:'newSession'})
  * - 背景与 --agent-bg 同色，固定不滚动（§2.2 header fixed）
+ * - Task 26：history 图标接 HistoryDropdown（rpc listSessions → openSession）；
+ *   more/layout 与 close 仍为可聚焦占位（后续任务接管）。
  */
 export function AgentHeader(): JSX.Element {
   const title = useAgentStore(s => s.title)
   const send = useAgentStore(s => s.send)
   const locale = useAgentStore(s => s.locale)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const historyBtnRef = useRef<HTMLButtonElement>(null)
+
   return (
     <header className="agentHeader">
       <div className="headerTitle" title={title}>{title}</div>
@@ -27,10 +33,23 @@ export function AgentHeader(): JSX.Element {
         >
           <i className="codicon codicon-add" aria-hidden="true" />
         </button>
-        {/* history / more / close：Task 24+ 接管行为，先保持可聚焦占位 */}
-        <button type="button" className="iconButton">
-          <i className="codicon codicon-history" aria-hidden="true" />
-        </button>
+        <span className="historyAnchor">
+          <button
+            ref={historyBtnRef}
+            type="button"
+            className="iconButton"
+            aria-label={t(locale, 'header.history')}
+            title={t(locale, 'header.history')}
+            aria-haspopup="menu"
+            aria-expanded={historyOpen}
+            onClick={() => setHistoryOpen(v => !v)}
+          >
+            <i className="codicon codicon-history" aria-hidden="true" />
+          </button>
+          {historyOpen && (
+            <HistoryDropdown anchorRef={historyBtnRef} onClose={() => setHistoryOpen(false)} />
+          )}
+        </span>
         <button type="button" className="iconButton">
           <i className="codicon codicon-layout" aria-hidden="true" />
         </button>

@@ -2,7 +2,6 @@ import React from 'react'
 import type { TimelineEvent } from '@shared/protocol'
 import { useAgentStore } from '../../store'
 import { Markdown } from '../shared/Markdown'
-import { openReviewPanel } from '../Review/ReviewPanel'
 import { rv } from '../Review/reviewText'
 import '../Review/review.css'
 
@@ -13,11 +12,16 @@ type CompletionEv = Extract<TimelineEvent, { type: 'completion' }>
  * - 正文直接输出 Markdown-like 内容（流式期间即渲染，Markdown memo 追加式更新）；
  *   正文落在背景上不加总卡片，段落间自然 vertical rhythm；
  * - 正文下方 files changed 汇总卡：`N files changed +X -Y >`（codicon-diff）+
- *   右侧 Review 按钮 → 打开 ReviewPanel（汇总数字随 state.changes 联动）。
+ *   右侧 Review 按钮 → 打开 ReviewPanel（汇总数字随 state.changes 联动）；
+ *   Task 26：打开审阅直接写 store.ui.reviewOpen（原 window CustomEvent hack 移除）。
  */
 export function CompletionEvent({ event }: { event: CompletionEv }): JSX.Element {
   const locale = useAgentStore(s => s.locale)
   const changes = useAgentStore(s => s.changes)
+
+  const openReview = (): void => {
+    useAgentStore.getState().setUiPref({ reviewOpen: true })
+  }
 
   const totalAdd = changes.reduce((n, c) => n + c.add, 0)
   const totalDel = changes.reduce((n, c) => n + c.del, 0)
@@ -32,7 +36,7 @@ export function CompletionEvent({ event }: { event: CompletionEv }): JSX.Element
           <button
             type="button"
             className="filesChangedSummary"
-            onClick={openReviewPanel}
+            onClick={openReview}
           >
             <i className="codicon codicon-diff" aria-hidden="true" />
             <span className="filesChangedLabel">
@@ -44,7 +48,7 @@ export function CompletionEvent({ event }: { event: CompletionEv }): JSX.Element
             </span>
             <i className="codicon codicon-chevron-right filesChangedChevron" aria-hidden="true" />
           </button>
-          <button type="button" className="reviewButton" onClick={openReviewPanel}>
+          <button type="button" className="reviewButton" onClick={openReview}>
             {rv(locale, 'card.review')}
           </button>
         </div>

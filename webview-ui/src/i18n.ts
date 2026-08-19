@@ -15,6 +15,11 @@ const dicts: Record<Locale, Record<string, string>> = {
     'quality.medium': '中',
     'quality.high': '高',
     'header.newSession': '新建会话',
+    /* Task 26：Header history 入口 + History 下拉（rpc listSessions） */
+    'header.history': '历史会话',
+    'history.title': '会话历史',
+    'history.loading': '加载中…',
+    'history.empty': '暂无历史会话',
     /* Task 22：Timeline 事件标签（§08/§09） */
     'event.thought.thinking': '思考中 {n}s',
     'event.thought.thought': '思考了 {n}s',
@@ -36,6 +41,11 @@ const dicts: Record<Locale, Record<string, string>> = {
     'quality.medium': 'Medium',
     'quality.high': 'High',
     'header.newSession': 'New Session',
+    /* Task 26: Header history entry + History dropdown (rpc listSessions) */
+    'header.history': 'Session History',
+    'history.title': 'Sessions',
+    'history.loading': 'Loading…',
+    'history.empty': 'No sessions yet',
     /* Task 22: Timeline event labels (§08/§09) */
     'event.thought.thinking': 'Thinking for {n}s',
     'event.thought.thought': 'Thought for {n}s',

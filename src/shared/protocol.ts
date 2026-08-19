@@ -9,6 +9,8 @@ export interface ActiveModel { providerId: string; modelId: string; quality: Qua
 
 export interface QueuedMessage { id: string; text: string }
 export interface FileChangeSummary { path: string; add: number; del: number; kind: FileKind }
+/** Task 26：rpc listSessions 的结果元素（host 侧 SessionStore.list() 摘要） */
+export interface SessionSummary { sessionId: string; title: string; createdAt: number }
 
 export interface TimelineEventBase { id: string; ts: number }
 export type TimelineEvent =
@@ -63,7 +65,7 @@ export type WebviewMessage =
   | { type: 'saveProviders'; providers: ProviderInfo[]; active: ActiveModel | null }
   | { type: 'saveApiKey'; providerId: string; apiKey: string }
   | { type: 'deleteProvider'; providerId: string }
-  | { type: 'rpc'; reqId: number; method: 'testProvider' | 'listModels'; params: { providerId: string; baseUrl?: string; protocol: Protocol } }
+  | { type: 'rpc'; reqId: number; method: 'testProvider' | 'listModels' | 'listSessions'; params: { providerId: string; baseUrl?: string; protocol: Protocol } }
 
 export type StreamEvent =
   | { type: 'thinking_delta'; text: string }

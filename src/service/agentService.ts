@@ -133,9 +133,15 @@ export class AgentService {
     this.emit([{ op: 'changes', changes: await this.tracker.changes(cwd).catch(() => [] as FileChangeSummary[]) }])
   }
 
-  /** listModels：providerId 可为空串（表单草稿），直接按 params.baseUrl 发请求，key 查不到用空串。 */
-  private async handleRpc(reqId: number, method: 'testProvider' | 'listModels', params: { providerId: string; baseUrl?: string; protocol: Protocol }): Promise<void> {
+  /** listModels：providerId 可为空串（表单草稿），直接按 params.baseUrl 发请求，key 查不到用空串。
+   *  listSessions（Task 26）：本地 JSONL 会话库直读，无需网络/密钥，params 仅作占位。 */
+  private async handleRpc(reqId: number, method: 'testProvider' | 'listModels' | 'listSessions', params: { providerId: string; baseUrl?: string; protocol: Protocol }): Promise<void> {
     try {
+      if (method === 'listSessions') {
+        const metas = await this.store.list()
+        this.deps.bridge.send({ type: 'rpcResult', reqId, ok: true, result: metas.map(m => ({ sessionId: m.sessionId, title: m.title, createdAt: m.createdAt })) })
+        return
+      }
       const key = (await this.deps.config.getApiKey(params.providerId)) ?? ''
       const base = (params.baseUrl ?? '').replace(/\/$/, '')
       let res: Response

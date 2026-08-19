@@ -2,18 +2,10 @@ import React, { useEffect, useState } from 'react'
 import type { TimelineEvent } from '@shared/protocol'
 import { useAgentStore } from '../../store'
 import { t } from '../../i18n'
-import { vscodeApi } from '../../api'
 import { EventRow } from './EventRow'
 import { Markdown } from '../shared/Markdown'
 
 type ThoughtEv = Extract<TimelineEvent, { type: 'thought' }>
-
-/** vscodeApi 持久化 UI 的最小形状（Task 26 由 store.persistUi 正式接管；本任务组件内读写） */
-interface PersistedUi { expandedThoughtIds?: string[]; queueOpen?: boolean; reviewOpen?: boolean }
-
-function readPrefs(): PersistedUi {
-  try { return (vscodeApi.getState<PersistedUi>() ?? {}) as PersistedUi } catch { return {} }
-}
 
 /**
  * 计时标签（【设计稿】§09/§15）：
@@ -48,33 +40,25 @@ function ThoughtLabel({ status, startedAt, durationMs, locale }: {
  * - running：展开 + 流式 markdown（Markdown memo + block 序号 key，追加式渲染不重挂载容器）；
  *   正文下方 "Working…" 实时尾标单独一行（working 字段，secondary 色）；
  * - done：折叠为一行 "Thought for Ns"（用户手动展开过则保持展开）；
- * - 展开态经 vscodeApi.getState() 记忆（仅在组件内 import api.ts，store.ts 保持 node 可加载）。
+ * - 展开态经 store.ui.expandedThoughtIds 记忆（Task 26 统一收口：setUiPref 合并 +
+ *   main.tsx 注入的持久化通道写 vscodeApi，组件不再直写 api）。
  */
 export function ThoughtEvent({ event }: { event: ThoughtEv }): JSX.Element {
   const locale = useAgentStore(s => s.locale)
   // 用户手选优先；默认 running 展开 / done 折叠（§08.2）
-  const [override, setOverride] = useState<boolean | null>(() => {
-    const saved = readPrefs().expandedThoughtIds
-    return saved && saved.includes(event.id) ? true : null
-  })
+  const [override, setOverride] = useState<boolean | null>(() =>
+    useAgentStore.getState().ui.expandedThoughtIds.includes(event.id) ? true : null,
+  )
   const expanded = override ?? event.status === 'running'
 
   const toggle = (): void => {
     const next = !expanded
     setOverride(next)
-    // 记忆展开态：组件内直写 vscodeApi（persistUi 占位由 Task 26 接管同一持久层）
-    const prefs = readPrefs()
-    const ids = new Set(prefs.expandedThoughtIds ?? [])
+    // 记忆展开态：统一走 store.ui（持久化由 store.setUiPref 经注入通道完成）
+    const ids = new Set(useAgentStore.getState().ui.expandedThoughtIds)
     if (next) ids.add(event.id)
     else ids.delete(event.id)
-    const expandedIds = [...ids]
-    const nextPrefs: PersistedUi = { ...prefs, expandedThoughtIds: expandedIds }
-    try { vscodeApi.setState(nextPrefs) } catch { /* host 不可达 */ }
-    useAgentStore.getState().persistUi({
-      expandedThoughtIds: expandedIds,
-      queueOpen: !!nextPrefs.queueOpen,
-      reviewOpen: !!nextPrefs.reviewOpen,
-    })
+    useAgentStore.getState().setUiPref({ expandedThoughtIds: [...ids] })
   }
 
   return (

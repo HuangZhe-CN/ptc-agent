@@ -4,14 +4,10 @@ import { rv } from './reviewText'
 import './review.css'
 
 /**
- * 「打开审阅」的跨组件信号（Task 23 受控约束：reviewOpen 状态住在 AgentView，
- * store.ts/i18n.ts/tokens.css 均不可改，故用 window CustomEvent 解耦；
- * Task 26 persistUi 统一收口时若迁移为 store 字段，此处仅改这一个模块）。
+ * Task 26：reviewOpen 已迁入 store.ui（setUiPref 统一收口）——
+ * 原 T23 的 window CustomEvent（OPEN_REVIEW_EVENT/openReviewPanel）已移除，
+ * CompletionEvent 直接写 store。
  */
-export const OPEN_REVIEW_EVENT = 'ptc-agent:open-review'
-export function openReviewPanel(): void {
-  try { window.dispatchEvent(new CustomEvent(OPEN_REVIEW_EVENT)) } catch { /* 非 DOM 环境 */ }
-}
 
 /** path 形如 a/b/c.tsx（host 侧已归一为 /）：尾段为 filename，其余为 muted path */
 function splitPath(p: string): { name: string; dir: string } {
