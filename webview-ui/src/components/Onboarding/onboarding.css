@@ -1,0 +1,314 @@
+/* ============================================================
+   Onboarding / ProviderManager 样式（Task 25）
+   受控约束：不得修改 tokens.css——本文件由 Onboarding.tsx import，
+   经 Vite（cssCodeSplit:false）并入 dist/index.css（CSP 允许的 <link> 通道；
+   运行时注入 <style> 会被 style-src 无 unsafe-inline 的 CSP 拦截）。
+   颜色只用既有 --agent-* 语义 token（表面 popover / 输入 input / 按钮 primary-secondary）。
+   ============================================================ */
+
+.obRoot {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: calc(var(--scale) * 26px) calc(var(--scale) * 25px) calc(var(--scale) * 40px) calc(var(--scale) * 28px);
+  font-size: 13px;
+  color: var(--agent-fg);
+}
+
+.obHead { display: flex; flex-direction: column; gap: 2px; }
+.obStepBadge { font-size: 11px; color: var(--agent-fg-2); }
+.obTitle { margin: 0; font-size: 13px; font-weight: 600; color: var(--agent-fg); }
+.obHint { margin: 0; font-size: 12px; color: var(--agent-fg-2); }
+.obError { font-size: 12px; color: var(--agent-error); overflow-wrap: anywhere; }
+.obFlexSpace { flex: 1 1 auto; }
+
+/* ---------- 协议三卡（步骤 1；窄侧栏用整宽行卡） ---------- */
+.obCards { display: flex; flex-direction: column; gap: 8px; }
+.obCard {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--agent-popover-border);
+  border-radius: var(--r-card);
+  background: var(--agent-popover-bg);
+  color: var(--agent-popover-fg);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.obCard:hover { background: var(--agent-hover-bg); color: var(--agent-hover-fg); }
+.obCard:focus-visible { outline: 1px solid var(--agent-focus); outline-offset: 1px; }
+.obProtoName { font-size: 13px; font-weight: 600; }
+.obProtoDesc { font-size: 12px; color: var(--agent-fg-2); }
+.obProtoUrl {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--agent-muted);
+  font-family: var(--vscode-editor-font-family, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- 表单 ---------- */
+.obForm { display: flex; flex-direction: column; gap: 10px; }
+.obField { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.obFieldLabel { font-size: 12px; color: var(--agent-fg-2); }
+
+.obInput,
+.obInput::placeholder {
+  font-family: inherit;
+}
+.obInput {
+  box-sizing: border-box;
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--agent-input-border);
+  border-radius: 4px;
+  background: var(--agent-input-bg);
+  color: var(--agent-input-fg);
+  font-size: 13px;
+  outline: none;
+}
+.obInput::placeholder { color: var(--agent-placeholder); }
+.obInput:focus { outline: 1px solid var(--agent-focus); outline-offset: -1px; }
+
+/* ---------- 按钮（primary / secondary / ghost 三档，对应 button token） ---------- */
+.obBtnPrimary,
+.obBtnSecondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--r-pill);
+  font-family: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.obBtnPrimary { background: var(--agent-primary-bg); color: var(--agent-primary-fg); }
+.obBtnPrimary:hover { background: var(--agent-primary-hover); }
+.obBtnSecondary { background: var(--agent-secondary-bg); color: var(--agent-secondary-fg); }
+.obBtnSecondary:hover { background: var(--agent-secondary-hover); }
+.obBtnPrimary:disabled,
+.obBtnSecondary:disabled { opacity: 0.55; cursor: default; }
+.obBtnPrimary:disabled:hover { background: var(--agent-primary-bg); }
+.obBtnSecondary:disabled:hover { background: var(--agent-secondary-bg); }
+.obBtnPrimary:focus-visible,
+.obBtnSecondary:focus-visible { outline: 1px solid var(--agent-focus); outline-offset: 1px; }
+.obBtnPrimary .codicon,
+.obBtnSecondary .codicon { font-size: 14px; }
+
+.obActions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.obActionsRight { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
+/* ---------- 模型多选列表（rpc listModels 结果） ---------- */
+.obCheckList {
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--agent-popover-border);
+  border-radius: 6px;
+  background: var(--agent-popover-bg);
+  scrollbar-width: thin;
+  scrollbar-color: var(--agent-scroll) transparent;
+}
+.obCheckHead {
+  position: sticky;
+  top: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--agent-fg-2);
+  background: var(--agent-popover-bg);
+  border-bottom: 1px solid var(--agent-popover-border);
+}
+.obCheckRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+  min-width: 0;
+}
+.obCheckRow:hover { background: var(--agent-hover-bg); }
+.obCheckRow .obModelId {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.obRoot input[type='checkbox'],
+.obRoot input[type='radio'] { accent-color: var(--agent-primary-bg); margin: 0; }
+
+/* ---------- 已选模型行 + 手动添加 ---------- */
+.obModels { display: flex; flex-direction: column; gap: 4px; }
+.obModelRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--agent-popover-border);
+  border-radius: 6px;
+  background: var(--agent-popover-bg);
+  font-size: 12.5px;
+  min-width: 0;
+}
+.obModelId {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.obTag {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--agent-popover-border);
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  color: var(--agent-fg-2);
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.obIconMini {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--agent-icon);
+  cursor: pointer;
+}
+.obIconMini .codicon { font-size: 14px; }
+.obIconMini:hover { background: var(--agent-toolbar-hover); }
+
+.obManualRow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.obManualRow .obInput { flex: 1 1 110px; width: auto; }
+.obThink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-size: 12px;
+  color: var(--agent-fg-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* ---------- 步骤 3：quality 分段选择 ---------- */
+.obRadioList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--agent-popover-border);
+  border-radius: 6px;
+  background: var(--agent-popover-bg);
+  padding: 3px;
+}
+.obQualitySeg {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--agent-popover-border);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+  background: var(--agent-popover-bg);
+}
+.obQualityOpt {
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  color: var(--agent-fg-2);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.obQualityOpt:hover { background: var(--agent-hover-bg); }
+.obQualityOpt.on { background: var(--agent-selected-bg); color: var(--agent-selected-fg); }
+.obQualityOpt:focus-visible { outline: 1px solid var(--agent-focus); outline-offset: -2px; }
+
+/* ---------- ProviderManager 列表 ---------- */
+.obProvList { display: flex; flex-direction: column; gap: 8px; }
+.obProvRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--agent-popover-border);
+  border-radius: var(--r-card);
+  background: var(--agent-popover-bg);
+  min-width: 0;
+}
+.obProvMain { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.obProvLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+}
+.obProvLabelText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.obProvMeta {
+  font-size: 11.5px;
+  color: var(--agent-fg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.obKeyState { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
+.obKeyState .codicon { font-size: 12px; }
+.obKeyState.ok { color: var(--agent-add); }
+.obKeyState.missing { color: var(--agent-error); }
+.obDeleteBtn { flex: none; }
+.obDeleteBtn.obBtnDanger {
+  background: transparent;
+  color: var(--agent-error);
+  padding: 0 8px;
+  height: 22px;
+  font-size: 11.5px;
+}
+.obDeleteBtn.obBtnDanger:hover { background: var(--agent-hover-bg); }
+.obAddBtn { align-self: flex-start; }
+
+/* ---------- High Contrast 强制边框（§3.5：层级不能只靠底色差） ---------- */
+body.vscode-high-contrast .obCard,
+body.vscode-high-contrast .obCheckList,
+body.vscode-high-contrast .obModelRow,
+body.vscode-high-contrast .obRadioList,
+body.vscode-high-contrast .obQualitySeg,
+body.vscode-high-contrast .obProvRow,
+body.vscode-high-contrast-light .obCard,
+body.vscode-high-contrast-light .obCheckList,
+body.vscode-high-contrast-light .obModelRow,
+body.vscode-high-contrast-light .obRadioList,
+body.vscode-high-contrast-light .obQualitySeg,
+body.vscode-high-contrast-light .obProvRow {
+  border-color: var(--agent-contrast-border);
+  box-shadow: none;
+}
+body.vscode-high-contrast .obBtnPrimary,
+body.vscode-high-contrast .obBtnSecondary,
+body.vscode-high-contrast-light .obBtnPrimary,
+body.vscode-high-contrast-light .obBtnSecondary {
+  border: 1px solid var(--agent-contrast-border);
+}
