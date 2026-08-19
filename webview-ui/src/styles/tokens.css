@@ -1,0 +1,159 @@
+/* ============================================================
+   tokens.css — 设计稿 §18「CSS Token 与样式骨架（Theme-Adaptive）」逐行照抄
+   颜色全部跟随 VS Code 当前主题（--agent-* → --vscode-* 三层映射，禁止硬编码 hex）
+   ============================================================ */
+
+:root {
+  /* ===== Host-mapped semantic colors ===== */
+  --agent-bg: var(--vscode-sideBar-background);
+  --agent-fg: var(--vscode-sideBar-foreground, var(--vscode-foreground));
+  --agent-fg-2: var(--vscode-descriptionForeground);
+  --agent-muted: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+  --agent-icon: var(--vscode-icon-foreground);
+
+  --agent-input-bg: var(--vscode-input-background);
+  --agent-input-fg: var(--vscode-input-foreground);
+  --agent-input-border: var(--vscode-input-border, transparent);
+  --agent-placeholder: var(--vscode-input-placeholderForeground);
+
+  --agent-popover-bg: var(--vscode-editorWidget-background);
+  --agent-popover-fg: var(--vscode-editorWidget-foreground);
+  --agent-popover-border: var(--vscode-editorWidget-border, var(--vscode-widget-border));
+  --agent-shadow: var(--vscode-widget-shadow, rgba(0,0,0,.25));
+
+  --agent-hover-bg: var(--vscode-list-hoverBackground);
+  --agent-hover-fg: var(--vscode-list-hoverForeground, var(--agent-fg));
+  --agent-selected-bg: var(--vscode-list-activeSelectionBackground);
+  --agent-selected-fg: var(--vscode-list-activeSelectionForeground);
+  --agent-toolbar-hover: var(--vscode-toolbar-hoverBackground);
+
+  --agent-primary-bg: var(--vscode-button-background);
+  --agent-primary-fg: var(--vscode-button-foreground);
+  --agent-primary-hover: var(--vscode-button-hoverBackground);
+  --agent-secondary-bg: var(--vscode-button-secondaryBackground);
+  --agent-secondary-fg: var(--vscode-button-secondaryForeground);
+  --agent-secondary-hover: var(--vscode-button-secondaryHoverBackground);
+
+  --agent-focus: var(--vscode-focusBorder);
+  --agent-contrast-border: var(--vscode-contrastBorder, var(--vscode-widget-border));
+  --agent-contrast-active: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+
+  --agent-error: var(--vscode-errorForeground);
+  --agent-add: var(--vscode-gitDecoration-addedResourceForeground);
+  --agent-modify: var(--vscode-gitDecoration-modifiedResourceForeground);
+  --agent-delete: var(--vscode-gitDecoration-deletedResourceForeground);
+  --agent-link: var(--vscode-textLink-foreground);
+  --agent-code-bg: var(--vscode-textCodeBlock-background);
+
+  --agent-scroll: var(--vscode-scrollbarSlider-background);
+  --agent-scroll-hover: var(--vscode-scrollbarSlider-hoverBackground);
+  --agent-scroll-active: var(--vscode-scrollbarSlider-activeBackground);
+
+  /* ===== Geometry stays owned by the plugin ===== */
+  --r-card: 10px;
+  --r-composer: 13px;
+  --r-pill: 9px;
+  --gap-event: 23px;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--agent-bg);
+  color: var(--agent-fg);
+}
+
+.agentView {
+  height: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--agent-bg);
+  color: var(--agent-fg);
+}
+
+.agentScroll {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--agent-scroll) transparent;
+}
+
+.agentScroll::-webkit-scrollbar { width: 4px; }
+.agentScroll::-webkit-scrollbar-track { background: transparent; }
+.agentScroll::-webkit-scrollbar-thumb {
+  background: var(--agent-scroll);
+  border-radius: 999px;
+}
+.agentScroll::-webkit-scrollbar-thumb:hover { background: var(--agent-scroll-hover); }
+.agentScroll::-webkit-scrollbar-thumb:active { background: var(--agent-scroll-active); }
+
+.agentDock {
+  position: relative;
+  padding: 0 8px 8px;
+  background: var(--agent-bg);
+}
+
+.composer {
+  min-height: 60px;
+  border: 1px solid var(--agent-input-border);
+  border-radius: var(--r-composer);
+  background: var(--agent-input-bg);
+  color: var(--agent-input-fg);
+}
+
+.composer::placeholder { color: var(--agent-placeholder); }
+
+.iconButton:hover { background: var(--agent-toolbar-hover); }
+.iconButton:focus-visible,
+.modelTrigger:focus-visible,
+.reviewButton:focus-visible,
+.composer:focus-within {
+  outline: 1px solid var(--agent-focus);
+  outline-offset: 1px;
+}
+
+.popover,
+.queuePanel {
+  background: var(--agent-popover-bg);
+  color: var(--agent-popover-fg);
+  border: 1px solid var(--agent-popover-border);
+  box-shadow: 0 6px 18px var(--agent-shadow);
+}
+
+.diffAdd { color: var(--agent-add); }
+.diffModify { color: var(--agent-modify); }
+.diffDelete { color: var(--agent-delete); }
+.stopGlyph { color: var(--agent-error); }
+
+body.vscode-high-contrast .agentCard,
+body.vscode-high-contrast .composer,
+body.vscode-high-contrast .popover,
+body.vscode-high-contrast .queuePanel,
+body.vscode-high-contrast-light .agentCard,
+body.vscode-high-contrast-light .composer,
+body.vscode-high-contrast-light .popover,
+body.vscode-high-contrast-light .queuePanel {
+  border-color: var(--agent-contrast-border);
+  box-shadow: none;
+}
+
+/* ============================================================
+   计划 Task 20 Step 3 追加段
+   ============================================================ */
+
+/* 设计稿 §04 字体：UI 字体继承宿主；正文行高 1.55-1.65 */
+body { font-family: var(--vscode-font-family); font-size: 13px; }
+.thoughtBody, .completionBody { line-height: 1.6; }
+code, .codePill { font-family: var(--vscode-editor-font-family, monospace); font-size: 12.5px; }
+/* 设计稿 §2.3 比例缩放：几何随容器宽等比（用 clamp 固定下限，防极窄不可用） */
+.contentInset { padding-inline: clamp(8px, 3.6cqw, 16px); }
+/* reduced motion（§15.1） */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 50ms !important; animation-duration: 50ms !important; transform: none !important; }
+}
