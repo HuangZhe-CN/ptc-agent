@@ -1,0 +1,5 @@
+src/**, test/**, webview-ui/src/**, webview-ui/node_modules/**, **/*.map, **/*.ts,
+esbuild.mjs, vitest.config.ts, .vscode/**, docs/**, scripts/**
+!media/**
+webview-ui/dist/**/*
+!webview-ui/dist/**

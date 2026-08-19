@@ -1,0 +1,38 @@
+{
+  "name": "ptc-agent",
+  "displayName": "PTC Agent",
+  "description": "Minimal, fast coding agent (Pure-Then-Code mode)",
+  "version": "0.1.0",
+  "publisher": "ptc-agent",
+  "private": true,
+  "engines": { "vscode": "^1.101.0" },
+  "categories": ["AI", "Chat"],
+  "main": "./dist/extension.js",
+  "workspaces": ["webview-ui"],
+  "scripts": {
+    "build": "node scripts/fetch-codicons.mjs && node esbuild.mjs && npm run build -w webview-ui",
+    "watch": "node esbuild.mjs --watch",
+    "test": "vitest run",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/vscode": "^1.101.0",
+    "@vscode/codicons": "^0.0.36",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "ptc-agent.container", "title": "PTC Agent", "icon": "media/container.svg" }
+      ]
+    },
+    "views": {
+      "ptc-agent.container": [
+        { "type": "webview", "id": "ptc-agent.view", "name": "Agent" }
+      ]
+    }
+  }
+}
