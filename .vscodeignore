@@ -1,5 +1,38 @@
-src/**, test/**, webview-ui/src/**, webview-ui/node_modules/**, **/*.map, **/*.ts,
-esbuild.mjs, vitest.config.ts, .vscode/**, docs/**, scripts/**
+# ===== 打包保留（negate 兜底）=====
+# 注意：vsce 中 ignore 与 negate 是独立集合，negate 命中即保留且优先于任何 ignore；
+# 因此这里不使用 !dist/**（会让 **/*.map 失效），根 dist/ 不被下方任何规则命中、默认保留。
 !media/**
-webview-ui/dist/**/*
 !webview-ui/dist/**
+!webview-ui/media/**
+
+# sourcemap（排除）
+**/*.map
+
+# 源码与测试（打包只含构建产物）
+src/**
+test/**
+webview-ui/src/**
+
+# 依赖
+node_modules/**
+webview-ui/node_modules/**
+
+# webview 运行时不需要的构建入口/清单（host 侧 HTML 为内联生成）
+webview-ui/index.html
+webview-ui/package.json
+
+# 构建脚本与配置
+esbuild.mjs
+vitest.config.ts
+scripts/**
+webview-ui/vite.config.ts
+webview-ui/tsconfig.json
+tsconfig.json
+
+# 文档与内部目录
+docs/**
+.superpowers/**
+.mimosa/**
+.vscode/**
+.git/**
+.gitignore
