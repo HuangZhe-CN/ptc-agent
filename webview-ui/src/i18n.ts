@@ -15,6 +15,17 @@ const dicts: Record<Locale, Record<string, string>> = {
     'quality.medium': '中',
     'quality.high': '高',
     'header.newSession': '新建会话',
+    /* Task 22：Timeline 事件标签（§08/§09） */
+    'event.thought.thinking': '思考中 {n}s',
+    'event.thought.thought': '思考了 {n}s',
+    'event.thought.working': '处理中…',
+    'event.explore.running': '探索中…',
+    'event.explore.done': '已探索 {n} 个文件',
+    'event.edit.label': '已编辑',
+    'event.run.running': '运行中…',
+    'event.run.done': '已运行',
+    'event.run.error': '已运行',
+    'event.run.noOutput': '（无输出）',
   },
   en: {
     'composer.placeholder': 'Ask anything…',
@@ -25,6 +36,17 @@ const dicts: Record<Locale, Record<string, string>> = {
     'quality.medium': 'Medium',
     'quality.high': 'High',
     'header.newSession': 'New Session',
+    /* Task 22: Timeline event labels (§08/§09) */
+    'event.thought.thinking': 'Thinking for {n}s',
+    'event.thought.thought': 'Thought for {n}s',
+    'event.thought.working': 'Working…',
+    'event.explore.running': 'Exploring…',
+    'event.explore.done': 'Explored {n} files',
+    'event.edit.label': 'Edited',
+    'event.run.running': 'Running…',
+    'event.run.done': 'Ran',
+    'event.run.error': 'Ran',
+    'event.run.noOutput': '(no output)',
   },
 }
 

@@ -394,3 +394,225 @@ body.vscode-high-contrast .iconButton:hover,
 body.vscode-high-contrast-light .iconButton:hover {
   outline: 1px solid var(--agent-contrast-border);
 }
+
+/* ============================================================
+   Task 22 追加：Timeline 事件组件族
+   几何来源【设计稿】§08（EventRow 骨架/事件变体）、§09（Thinking 展开/流式正文）、
+   §15（动效时序）、§17.1（渲染不变量）。口径同 T21：几何 = capture px × var(--scale)
+   （382w 参考值 = capture × 0.5，计划给出的参考口径值按此折算）；文字/图标尺寸不随 scale。
+   ============================================================ */
+
+/* ---------- 新事件进入（§15：100–160ms opacity + 2px y 位移，禁止 overshoot） ---------- */
+@keyframes eventIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- EventRow 骨架（§08.1） ---------- */
+.eventRow {
+  margin-left: calc(var(--scale) * 20px);   /* 一级事件左起点（x≈39 capture 的 382w 参考口径，计划 Task 22） */
+  min-width: 0;
+  animation: eventIn 140ms ease-out;        /* §15：新 EventRow 100–160ms */
+}
+.eventRow.isError .eventLabel,
+.eventRow.isError .eventIcon { color: var(--agent-error); }  /* §08.2 error 态标签变色 */
+
+.eventHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;                                 /* 图标与文件名 6–10 capture（§08.1） */
+  min-height: 22px;                         /* 同级 EventRow 最小高度统一（§17.1） */
+  width: 100%;
+  padding: 1px 2px;
+  border: none;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+button.eventHeader { cursor: pointer; border-radius: 4px; }
+button.eventHeader:focus-visible { outline: 1px solid var(--agent-focus); outline-offset: 0; }
+.eventHeaderStatic { cursor: default; }
+
+.eventLabel {
+  flex: none;
+  color: var(--agent-fg-2);                 /* Label 色 --text-secondary，regular（§08.1/§04） */
+  font-weight: 400;
+  white-space: nowrap;
+}
+.eventIcon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;                              /* 固定 slot（§17.1：宽度差异不挤压 filename） */
+  height: 16px;
+  color: var(--agent-icon);
+}
+.eventIcon .codicon { font-size: 14px; }
+.eventTarget {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;                      /* 长命令/文件名单行截断（§08.2 Ran） */
+  color: var(--agent-fg);
+  font-weight: 600;                         /* Target 半粗体 primary（§08.1/§04） */
+}
+.eventDiff {
+  flex: none;
+  margin-left: 4px;                         /* 与文件名之间 3–5px（§08.1） */
+  display: inline-flex;
+  gap: 4px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;       /* +9→+1331 不挤压文件名（§17.1） */
+}
+.eventChevron {
+  flex: none;
+  margin-left: 2px;
+  font-size: 14px;
+  color: var(--agent-fg-2);
+  transition: transform 140ms ease;         /* §15 chevron 120–160ms 0°↔90° */
+}
+.eventRow.expanded .eventChevron { transform: rotate(90deg); }
+
+/* ---------- 折叠容器（§9.1 grid-template-rows 0fr→1fr + opacity；§15 160–220ms） ---------- */
+.eventCollapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 200ms ease, opacity 200ms ease;
+}
+.eventRow.expanded .eventCollapse { grid-template-rows: 1fr; opacity: 1; }
+.eventCollapseInner { min-height: 0; overflow: hidden; }   /* collapse 只隐藏 body，header DOM 不变（§17.1） */
+
+/* ---------- Thought 正文（§09：比事件标题右移约 18–36 capture；灰色 regular；行高见 §04） ---------- */
+.thoughtBody {
+  padding: 2px 0 2px calc(var(--scale) * 18px);
+  color: var(--agent-fg-2);
+}
+.thoughtWorking {                           /* 实时尾标单独一行，Secondary 色（§09） */
+  margin-top: 4px;
+  color: var(--agent-fg-2);
+  font-size: 12.5px;
+}
+
+/* ---------- Markdown（零依赖渲染；§09 inline code 胶囊、§04 小标题 semibold） ---------- */
+.markdown { min-width: 0; }
+.mdPara { margin: 6px 0; }
+.mdHeading { margin: 10px 0 4px; color: var(--agent-fg); font-weight: 600; }
+.mdH1 { font-size: 15px; }
+.mdH2 { font-size: 14px; }
+.mdH3, .mdH4 { font-size: 13px; }           /* §04：Thinking/完成总结小节标题 13px semibold */
+.mdList { margin: 6px 0; padding-left: 22px; }
+.mdList li { margin: 2px 0; }
+.mdInlineCode {
+  padding: 1px 5px;                         /* §09：上下 padding 1–2px、radius 小，避免徽章化 */
+  border-radius: 4px;
+  background: var(--agent-code-bg);
+  color: var(--agent-fg);
+  font-size: 12.5px;
+}
+.mdCodeBlock {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--agent-code-bg);
+  overflow-x: auto;
+}
+.mdCodeBlock code {
+  padding: 0;
+  background: none;
+  font-size: 12.5px;
+  white-space: pre;
+}
+.mdLink { color: var(--agent-link); }
+
+/* ---------- FileIcon（§05/§08.1：彩色文字 glyph；§3.4 允许 glyph 专属固定低饱和色） ---------- */
+.fileIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-weight: 700;
+  font-size: 8.5px;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+.fileIcon .codicon { font-size: 13px; }
+.fileIcon-js    { color: #9a9a3d; }          /* JS 黄绿（glyph 专属固定色） */
+.fileIcon-css   { color: #4a8fc0; }          /* CSS 蓝 */
+.fileIcon-html  { color: #c4694a; }          /* HTML 橙 */
+.fileIcon-ts    { color: #4478b8; }          /* TS 蓝 */
+.fileIcon-json  { color: #a3852f; }          /* JSON 黄 */
+.fileIcon-md    { color: #8a8a8a; }          /* MD 灰 */
+.fileIcon-other { color: var(--agent-icon); }
+
+/* ---------- Run（§08.2：command codePill；展开 outputTail mono 可换行） ---------- */
+.codePill {
+  padding: 1px 5px;                         /* §4.1：上下 padding 极小，避免徽章化 */
+  border-radius: 4px;
+  background: var(--agent-code-bg);
+  color: var(--agent-fg);
+  font-size: 12px;
+}
+.runOutput {
+  margin: 4px 0 2px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--agent-code-bg);
+  color: var(--agent-fg);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;                    /* mono、可换行 */
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.runOutputEmpty { color: var(--agent-muted); }
+
+/* ---------- Explore 展开列表（§08.2：targets muted，每行 path + 文件图标） ---------- */
+.exploreTargets {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0;
+}
+.exploreTarget {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--agent-muted);
+  font-size: 12.5px;
+  min-width: 0;
+}
+.exploreTarget .codicon { font-size: 14px; flex: none; }
+.explorePath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Error（§08.2：单行 codicon-error + message，error 色） ---------- */
+.errorRow .eventIcon { color: var(--agent-error); }
+.errorMessage {
+  color: var(--agent-error);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Completion 最小占位（Task 23 完善：小节标题/反馈操作/Review 联动） ---------- */
+.completionRow { color: var(--agent-fg); }
+.completionBody { padding: 2px 0; min-width: 0; }
+
+/* ---------- High Contrast 补边框（§3.5/§20.2：块级代码/输出容器不能只靠底色差） ---------- */
+body.vscode-high-contrast .mdCodeBlock,
+body.vscode-high-contrast .runOutput,
+body.vscode-high-contrast-light .mdCodeBlock,
+body.vscode-high-contrast-light .runOutput {
+  border: 1px solid var(--agent-contrast-border);
+}
