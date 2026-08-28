@@ -34,6 +34,8 @@ export class WebviewBridge {
       const m = raw as WebviewMessage
       if (m && m.type === 'ready') { this.ready(); return }
       if (this.disposed) return
+      // 非 WebviewMessage 形状（无字符串 type 字段）直接丢弃，不进 handler
+      if (!m || typeof m !== 'object' || typeof (m as { type?: unknown }).type !== 'string') return
       this.handler?.(m)
     })
     target.onDidDispose?.(() => { this.disposed = true; this.isReady = false })   // 新 view → 新 bridge 重新握手

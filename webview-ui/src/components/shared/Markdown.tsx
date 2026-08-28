@@ -1,4 +1,5 @@
 import React from 'react'
+import { useThrottled } from '../../hooks/useThrottled'
 
 /**
  * 零依赖手写 Markdown 渲染器（Task 22：【设计稿】§09 + 计划 Task 22）。
@@ -102,7 +103,7 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
         const label = lm[1] || lm[2]
         const href = safeHref(lm[2])
         out.push(href !== undefined
-          ? <a key={k} className="mdLink" href={href} title={href}>{label}</a>
+          ? <a key={k} className="mdLink" href={href} title={href} target="_blank" rel="noopener noreferrer">{label}</a>
           : <span key={k}>{label}</span>)
       } else out.push(tok)
     }
@@ -113,7 +114,9 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
 }
 
 export const Markdown = React.memo(function Markdown({ source }: { source: string }): JSX.Element {
-  const blocks = parseBlocks(source)
+  // 流式高频 patch：节流后 parseBlocks 只随 ~50ms 粒度的视图重跑（O(全文)/次 → O(全文)/50ms）
+  const throttled = useThrottled(source, 50)
+  const blocks = React.useMemo(() => parseBlocks(throttled), [throttled])
   return (
     <div className="markdown">
       {blocks.map((b, i) => {

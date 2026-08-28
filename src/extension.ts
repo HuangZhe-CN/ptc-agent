@@ -26,10 +26,26 @@ export function activate(context: vscode.ExtensionContext): void {
       mkdir: async p => { await fsp.mkdir(p, { recursive: true }) },
       writeFile: (p, s) => fsp.writeFile(p, s, 'utf8'),
       deleteFile: p => fsp.rm(p),   // I1：新文件 Reject 时删除工作区文件
+      readHead: async (p, bytes) => {
+        const fh = await fsp.open(p, 'r')
+        try {
+          const buf = Buffer.alloc(bytes)
+          const { bytesRead } = await fh.read(buf, 0, bytes, 0)
+          return buf.subarray(0, bytesRead).toString('utf8')
+        } finally { await fh.close() }
+      },
+      stat: async p => {
+        try { const st = await fsp.stat(p); return { mtimeMs: st.mtimeMs, size: st.size } } catch { return null }
+      },
     },
     openDiff: async (sessionId, relPath) => {
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)) return   // 非法会话 id：忽略（防 uri scheme 注入/穿越）
       const root = wsRoot() ?? process.cwd()
-      await openSnapshotDiff(sessionId, relPath, path.resolve(root, relPath))
+      const rel = relPath.replace(/\\/g, '/')
+      const abs = path.resolve(root, rel)
+      const rootAbs = path.resolve(root)
+      if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) return   // 相对路径逃逸工作区：忽略
+      await openSnapshotDiff(sessionId, rel, abs)
     },
     executeCommand: async (command, ...args) => { await vscode.commands.executeCommand(command, ...args) },
     showInputBox: async opts => vscode.window.showInputBox({ prompt: opts.prompt, value: opts.value }),
@@ -60,6 +76,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   ) {}
   public resolveWebviewView(view: vscode.WebviewView): void {
     view.webview.options = { enableScripts: true, localResourceRoots: [this.context.extensionUri, vscode.Uri.joinPath(this.context.extensionUri, 'webview-ui/dist')] }
+    // 重开兜底：正常路径由下方 onDidDispose 停旧 service；dispose 事件竞态未达时在此再停一次（防后台烧 token/串写旧 JSONL）
+    this.serviceRef.service?.stop('webview re-created')
     const bridge = new WebviewBridge(view.webview)
     // Thenable → Promise 适配（SecretStorage/Memento 是 Thenable 返回面）
     const config = new ConfigStore(
@@ -79,6 +97,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     bridge.onMessage(m => { void service.handleWebviewMessage(m) })
     bridge.onReady(() => { void service.bootSnapshot() })   // ready → 握手 flush + boot 快照
     view.webview.html = this.html(view.webview)
+    // view 关闭/重载：中止进行中的回合（LLM 流/工具/worker 不再后台空跑烧 token）
+    this.context.subscriptions.push(view.onDidDispose(() => service.stop('webview disposed')))
   }
   private html(webview: vscode.Webview): string {
     const nonce = randomBytes(16).toString('hex')
@@ -86,7 +106,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'webview-ui/dist/index.css'))
     const codicons = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'webview-ui/media/codicon.css'))
     return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${webview.cspSource}; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src ${webview.cspSource}; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
       <link rel="stylesheet" href="${codicons}"><link rel="stylesheet" href="${style}">
       </head><body><div id="root"></div>
       <script nonce="${nonce}" src="${script}"></script></body></html>`

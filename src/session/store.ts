@@ -8,11 +8,24 @@ export type SessionRecord =
   | { kind: 'meta'; meta: SessionMeta }
   | { kind: 'history'; message: HistoryMessage }
   | { kind: 'ops'; ops: UiOp[] }
-export interface SessionStoreDeps { readDir(p: string): Promise<string[]>; readFile(p: string): Promise<string>; appendFile(p: string, s: string): Promise<void>; mkdir(p: string): Promise<void> }
+export interface SessionStoreDeps {
+  readDir(p: string): Promise<string[]>
+  readFile(p: string): Promise<string>
+  appendFile(p: string, s: string): Promise<void>
+  mkdir(p: string): Promise<void>
+  /** 只读文件头部若干字节（list() 浅读 meta 用；未提供时 list 回退全量读取） */
+  readHead?(p: string, bytes: number): Promise<string>
+}
+
+/** 会话 id 合法形状（生成器产出 [a-z0-9]+；防 webview 输入路径穿越/scheme 注入） */
+export const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
 
 export class SessionStore {
   constructor(private readonly root: string, private readonly deps: SessionStoreDeps) {}
-  private file(sessionId: string): string { return `${this.root.replace(/[\\/]$/, '')}/${sessionId}.jsonl` }
+  private file(sessionId: string): string {
+    if (!SESSION_ID_RE.test(sessionId)) throw new Error(`store: illegal session id ${JSON.stringify(sessionId.slice(0, 16))}`)
+    return `${this.root.replace(/[\\/]$/, '')}/${sessionId}.jsonl`
+  }
   async append(sessionId: string, record: SessionRecord): Promise<void> {
     await this.deps.mkdir(this.root)
     await this.deps.appendFile(this.file(sessionId), JSON.stringify(record) + '\n')
@@ -36,10 +49,21 @@ export class SessionStore {
     try { files = await this.deps.readDir(this.root) } catch { return [] }
     const metas: SessionMeta[] = []
     for (const f of files.filter(f => f.endsWith('.jsonl'))) {
+      const sid = f.slice(0, -6)
       // I4：单文件失败隔离——一个坏会话文件不拖垮整个列表
       try {
-        const meta = (await this.load(f.slice(0, -6))).find(r => r.kind === 'meta') as { meta: SessionMeta } | undefined
-        if (meta) metas.push(meta.meta)
+        // meta 是会话首行且远小于 8KB：浅读头部即可命中，免全文 parse（会话多/文件大时的全量重读放大）
+        let meta: SessionMeta | undefined
+        if (this.deps.readHead) {
+          const head = await this.deps.readHead(this.file(sid), 8192)
+          for (const line of head.split('\n')) {
+            if (!line.includes('"kind":"meta"')) continue
+            try { meta = (JSON.parse(line) as { kind: 'meta'; meta: SessionMeta }).meta } catch { /* 8KB 边界撕裂行 */ }
+            break
+          }
+        }
+        if (!meta) meta = ((await this.load(sid)).find(r => r.kind === 'meta') as { meta: SessionMeta } | undefined)?.meta
+        if (meta) metas.push(meta)
       } catch { /* skip unreadable session file */ }
     }
     return metas.sort((a, b) => b.createdAt - a.createdAt)

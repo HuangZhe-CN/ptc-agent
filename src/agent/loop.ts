@@ -55,9 +55,25 @@ export class AgentLoop {
   /** C1/C2：适配器经 replay_envelope 事件上报的协议原生回放信封（无信封时回退 providerReplay 伪造） */
   private replayEnvelope: unknown
 
+  /** 流式 markdown patch 合并节流：每个事件 id 独立缓冲，距上次 flush ≥PATCH_MIN_INTERVAL_MS
+   *  或事件边界（message_done / 流结束 / error / run 返回）才 emit 一次。flush 的 patch 携带
+   *  最新全量文本——JSONL 重放的终态与逐 delta 逐次 emit 等价，写放大从 O(delta 数) 降为 O(时间片)。 */
+  private static readonly PATCH_MIN_INTERVAL_MS = 50
+  private pendingPatches: Map<string, { markdown: string }> = new Map()
+  private lastPatchFlushAt: Map<string, number> = new Map()
+  private patchTimer: NodeJS.Timeout | null = null
+
   constructor(private readonly d: LoopDeps) {}
 
   async run(userText: string, signal: AbortSignal, images?: ChatImage[]): Promise<'completed' | 'error' | 'aborted'> {
+    try {
+      return await this.doRun(userText, signal, images)
+    } finally {
+      this.flushStreamPatches()   // 任意返回路径（completed/error/aborted）不留未落盘的终态 patch
+    }
+  }
+
+  private async doRun(userText: string, signal: AbortSignal, images?: ChatImage[]): Promise<'completed' | 'error' | 'aborted'> {
     const d = this.d
     // 图片随首条 user 历史进入请求体（三适配器按协议渲染）；无图时不带 images 字段（JSONL 与现状逐字节一致）
     d.onHistory({ role: 'user', text: userText, ...(images?.length ? { images } : {}) })
@@ -76,15 +92,16 @@ export class AgentLoop {
       } catch (error: unknown) {
         if (signal.aborted) return this.abort(signal)
         // fetch 网络层异常（含代理断流 TypeError: terminated）
-        events.push({ type: 'stream_error', kind: 'network', message: error instanceof Error ? error.message : String(error) })
+        events.push({ type: 'stream_error', kind: 'network', message: this.redact(error instanceof Error ? error.message : String(error)) })
       }
+      this.flushStreamPatches()   // 流结束/出错：边界 flush（err/done 处理前保证过程文本已落盘）
       const done = events.find(e => e.type === 'message_done') as Extract<StreamEvent, { type: 'message_done' }> | undefined
       const err = [...events].reverse().find(e => e.type === 'stream_error') as Extract<StreamEvent, { type: 'stream_error' }> | undefined
       if (err) {
         if (err.kind === 'rateLimit' || err.kind === 'network') {
           if (this.retries < 3) {
             this.retries++
-            d.emit([{ op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: `${err.kind}: ${err.message} — retrying (${this.retries}/3)` } }])
+            d.emit([{ op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: `${err.kind}: ${this.redact(err.message)} — retrying (${this.retries}/3)` } }])
             this.resetRoundStreaming()
             await (d.delayMs ?? defaultDelay)(1000 * 2 ** (this.retries - 1))
             continue
@@ -104,7 +121,7 @@ export class AgentLoop {
           }
         }
         d.emit([
-          { op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: `${err.kind}: ${err.message}` } },
+          { op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: this.redact(`${err.kind}: ${err.message}`) } },
           { op: 'phase', phase: 'error' },
         ])
         return 'error'
@@ -153,6 +170,7 @@ export class AgentLoop {
 
   /** 重试（rateLimit/network/thinking 降级）前清空本轮流式累积，避免重放轮文本重复进入 completion/历史 */
   private resetRoundStreaming(): void {
+    this.flushStreamPatches()   // 失败轮 partial 全文先落盘，clearCompletionEvent 的 remove 才有对应 append/patch 序列
     this.clearCompletionEvent()
     this.pendingTurn = undefined
     this.thoughtId = undefined
@@ -175,6 +193,36 @@ export class AgentLoop {
     this.completionText = ''
   }
 
+  /** delta 到达：距该 id 上次 flush ≥间隔则立即 emit，否则入缓冲（定时器兜底到点 flush） */
+  private bufferStreamPatch(id: string, markdown: string): void {
+    this.pendingPatches.set(id, { markdown })
+    const last = this.lastPatchFlushAt.get(id) ?? 0
+    const now = Date.now()
+    const elapsed = now - last
+    if (elapsed >= AgentLoop.PATCH_MIN_INTERVAL_MS) { this.flushStreamPatches(); return }
+    if (this.patchTimer === null) {
+      this.patchTimer = setTimeout(() => { this.patchTimer = null; this.flushStreamPatches() }, AgentLoop.PATCH_MIN_INTERVAL_MS - elapsed)
+      this.patchTimer.unref()
+    }
+  }
+
+  /** 边界/到点：把缓冲里的最新全量文本按 id 合并为一批 patch emit（幂等，缓冲空则无操作） */
+  private flushStreamPatches(): void {
+    if (this.patchTimer !== null) { clearTimeout(this.patchTimer); this.patchTimer = null }
+    if (this.pendingPatches.size === 0) return
+    const ops = [...this.pendingPatches.entries()].map(([id, patch]) => ({ op: 'patch' as const, id, patch: patch as never }))
+    const now = Date.now()
+    for (const id of this.pendingPatches.keys()) this.lastPatchFlushAt.set(id, now)
+    this.pendingPatches.clear()
+    this.d.emit(ops)
+  }
+
+  /** 错误文本脱敏：流错误消息（URL/回显）中出现的 apiKey 一律替换，不进时间线与 JSONL */
+  private redact(text: string): string {
+    const key = this.d.provider.apiKey
+    return key ? text.split(key).join('[REDACTED]') : text
+  }
+
   private consume(ev: StreamEvent): void {
     const d = this.d
     switch (ev.type) {
@@ -187,7 +235,7 @@ export class AgentLoop {
           d.emit([{ op: 'append', event: { id: this.thoughtId, ts: Date.now(), type: 'thought', status: 'running', startedAt, markdown: '', working: '' } }])
         }
         this.turnThinking = (this.turnThinking ?? '') + ev.text
-        d.emit([{ op: 'patch', id: this.thoughtId, patch: { markdown: this.turnThinking } as never }])
+        this.bufferStreamPatch(this.thoughtId, this.turnThinking ?? '')
         break
       }
       case 'text_delta': {
@@ -202,7 +250,7 @@ export class AgentLoop {
           d.emit([{ op: 'append', event: { id: this.completionId, ts: Date.now(), type: 'completion', markdown: '' } }])
         }
         this.completionText += ev.text
-        d.emit([{ op: 'patch', id: this.completionId, patch: { markdown: this.completionText } as never }])
+        this.bufferStreamPatch(this.completionId, this.completionText)
         break
       }
       case 'tool_call_delta':
@@ -213,6 +261,7 @@ export class AgentLoop {
         this.replayEnvelope = ev.envelope
         break
       case 'message_done': {
+        this.flushStreamPatches()   // 事件边界：终态全文 patch 先于 status done 落盘
         if (this.thoughtId) d.emit([{ op: 'patch', id: this.thoughtId, patch: { status: 'done', durationMs: Date.now() - (this.thoughtStartedAt ?? Date.now()) } as never }])
         if (ev.stopReason === 'tool_use') {
           let args: { code: string; description: string }
@@ -324,6 +373,8 @@ export class AgentLoop {
       return { content, isError: !!result.error }
     } catch (error: unknown) {
       pool.abortPending('run aborted')
+      // 等 inflight 工具（长 bash 等）收尾后再 patch run 终态：finish 事件不迟到、不与新轮 emit 交错
+      await pool.settle().catch(() => {})
       const message = error instanceof Error ? error.message : String(error)
       d.emit([{ op: 'patch', id: runEventId, patch: { status: 'error', outputTail: message } as never }])
       return { content: JSON.stringify({ error: { kind: 'abort', message } }), isError: true }
@@ -331,6 +382,7 @@ export class AgentLoop {
   }
 
   private abort(signal: AbortSignal): 'aborted' {
+    this.flushStreamPatches()
     // 保留时间线，标注 stopped；phase 回 completed
     this.d.emit([
       { op: 'append', event: { id: this.d.newEventId(), ts: Date.now(), type: 'error', message: `Stopped (${String(signal.reason ?? 'user')})` } },

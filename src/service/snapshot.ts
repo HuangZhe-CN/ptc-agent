@@ -10,6 +10,8 @@ export interface SnapshotFs {
   exists(p: string): Promise<boolean>
   /** I1：新文件 Reject 时删除工作区文件（原状态=不存在）；未提供时降级写空串 */
   deleteFile?(p: string): Promise<void>
+  /** 工作区文件 mtime/size 探针（changes() 的 diff 缓存键）；未提供时每轮全量重算 */
+  stat?(p: string): Promise<{ mtimeMs: number; size: number } | null>
 }
 
 /** I1：新文件哨兵——编辑前文件不存在（ENOENT）时登记此值；与 drop() 的空串（已接受）语义区分。 */
@@ -19,6 +21,10 @@ export const NEW_FILE_SNAPSHOT = '\0new'
 export class SnapshotTracker {
   /** I6：操作串行链——beforeEdit(内含 ensureManifest 读改写)/changes 等排队执行，杜绝并发丢登记 */
   private chain: Promise<unknown> = Promise.resolve()
+
+  /** changes() 的 per-file diff 缓存：stat 签名（mtimeMs:size / deleted）未变则复用上次 diff 结果，
+   *  免每工具轮全量重读工作区文件 + countLineDiff。drop/restore 改动快照侧内容时按 rel 失效。 */
+  private diffCache = new Map<string, { sig: string; summary: FileChangeSummary | null }>()
 
   constructor(private readonly root: string, private readonly fs: SnapshotFs) {}
 
@@ -62,6 +68,7 @@ export class SnapshotTracker {
     return this.enqueue(async () => {
       const target = this.snapPath(rel)
       const snap = await this.fs.readFile(target)
+      this.diffCache.delete(rel)
       if (snap === NEW_FILE_SNAPSHOT) {
         const wsPath = path.resolve(cwd, rel)
         if (this.fs.deleteFile) await this.fs.deleteFile(wsPath)
@@ -75,6 +82,7 @@ export class SnapshotTracker {
   /** Accept：快照内容置空（已接受标记）。 */
   async drop(rel: string): Promise<void> {
     return this.enqueue(async () => {
+      this.diffCache.delete(rel)
       const target = this.snapPath(rel)
       if (await this.fs.exists(target)) await this.fs.writeFile(target, '')
     })
@@ -97,12 +105,25 @@ export class SnapshotTracker {
       const target = this.snapPath(rel)
       const snap = await this.fs.readFile(target)
       if (snap === '') continue   // accepted
+      const wsAbs = path.resolve(cwd, rel)
+      // stat 签名未变 → 复用上次 diff（null 结果也缓存：零差异/已删除不重复重算）
+      let sig: string | null = null
+      if (this.fs.stat) {
+        const st = await this.fs.stat(wsAbs).catch(() => null)
+        sig = st === null ? 'deleted' : `${st.mtimeMs}:${st.size}`
+      }
+      const cached = sig !== null ? this.diffCache.get(rel) : undefined
+      if (cached && cached.sig === sig) {
+        if (cached.summary) out.push(cached.summary)
+        continue
+      }
       const original = snap === NEW_FILE_SNAPSHOT ? '' : snap
       let current = ''
-      try { current = await this.fs.readFile(path.resolve(cwd, rel)) } catch { /* 已删除文件 */ }
+      try { current = await this.fs.readFile(wsAbs) } catch { /* 已删除文件 */ }
       const { add, del } = countLineDiff(original, current)
-      if (add === 0 && del === 0) continue
-      out.push({ path: rel.replace(/\\/g, '/'), add, del, kind: fileKindOf(rel) })
+      const summary = add === 0 && del === 0 ? null : { path: rel.replace(/\\/g, '/'), add, del, kind: fileKindOf(rel) }
+      if (sig !== null) this.diffCache.set(rel, { sig, summary })
+      if (summary) out.push(summary)
     }
     return out
   }

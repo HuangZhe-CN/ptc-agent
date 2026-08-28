@@ -3,7 +3,7 @@ import type { Protocol, WebviewMessage, UiOp, TimelineEvent, QueuedMessage, File
 import { initialWebviewState } from '../shared/protocol'
 import { ConfigStore } from './configStore'
 import { WebviewBridge } from './webviewBridge'
-import { SessionStore, type SessionStoreDeps } from '../session/store'
+import { SessionStore, SESSION_ID_RE, type SessionStoreDeps } from '../session/store'
 import { SnapshotTracker } from './snapshot'
 import { AgentLoop } from '../agent/loop'
 import { openaiAdapter } from '../protocol/openai'
@@ -20,6 +20,8 @@ export interface VscodeFsApi extends SessionStoreDeps {
   writeFile(p: string, s: string): Promise<void>
   /** I1：新文件 Reject 时删除工作区文件；宿主必须提供（测试可省略，tracker 降级写空串） */
   deleteFile?(p: string): Promise<void>
+  /** 快照 diff 缓存的 mtime/size 探针；未提供时 changes() 每轮全量重算 */
+  stat?(p: string): Promise<{ mtimeMs: number; size: number } | null>
 }
 
 /** vscode 依赖注入面（extension.ts 提供真实现；测试提供假实现）。 */
@@ -68,6 +70,10 @@ export class AgentService {
 
   /** 当前会话 tracker（extension 接线 reviewProvider 读取快照原文用）。 */
   get currentTracker(): SnapshotTracker | null { return this.tracker }
+
+  /** 中止进行中的回合（extension 在 webview dispose/重开时调用；无进行中回合则无操作）。
+   *  loop 感知 abort 后自行收尾（时间线标注 + runtime dispose 在 defaultLoop 的 finally）。 */
+  stop(reason: string): void { this.abort?.abort(reason) }
 
   /** 只读测试钩子（Task 27 冒烟）：最近一次 bootSnapshot 构建的完整状态；null = 尚未 ready。 */
   getLastSnapshotForTest(): WebviewState | null { return this.lastSnapshotState }
@@ -140,6 +146,7 @@ export class AgentService {
         await this.openSession(null); return
       case 'openSession':
         if (this.isTurnActive()) return   // I3：同上；UI 侧运行中禁用入口，此处兜底竞态
+        if (!SESSION_ID_RE.test(m.sessionId)) return   // 非法会话 id（穿越/注入形状）：静默忽略
         await this.openSession(m.sessionId); return
       case 'reviewFile': await this.deps.api.openDiff(this.sessionId ?? '', m.path.replace(/\\/g, '/')); return
       case 'reviewAccept': await this.acceptReject(m.path, 'accept'); return
@@ -226,6 +233,7 @@ export class AgentService {
       mkdir: p => this.deps.api.fs.mkdir(p),
       exists: async p => { try { await this.deps.api.fs.readFile(p); return true } catch { return false } },
       deleteFile: p => this.deps.api.fs.deleteFile ? this.deps.api.fs.deleteFile(p) : Promise.resolve(),
+      ...(this.deps.api.fs.stat ? { stat: (p: string) => this.deps.api.fs.stat!(p) } : {}),
     })
     if (sessionId) {
       // 打开旧会话：回放 JSONL 恢复内存态；不得向旧会话文件追加 clear（会破坏其回放终态）
@@ -273,7 +281,12 @@ export class AgentService {
       thinkingMode: await this.deps.config.getThinkingMode(active.providerId, active.modelId) }
     const title = this.title === 'Agent' ? SessionStore.titleOf(userText) : this.title
     const meta = { sessionId: this.sessionId!, title, createdAt: Date.now(), providerId: active.providerId, modelId: active.modelId }
-    await this.store.append(this.sessionId!, { kind: 'meta', meta })
+    try {
+      await this.store.append(this.sessionId!, { kind: 'meta', meta })
+    } catch (error: unknown) {
+      // globalStorage 持久化故障：降级为可见 error 提示后继续回合（内存时间线/历史仍完整，bridge void 调用不再逃逸成 unhandledRejection）
+      this.emit([{ op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: `session persist failed: ${error instanceof Error ? error.message : String(error)}` } }])
+    }
     this.emit([{ op: 'title', title }])
     this.abort = new AbortController()
     const run = this.loopFactory
