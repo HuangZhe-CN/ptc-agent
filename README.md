@@ -20,7 +20,7 @@
 ### 方式一：安装 .vsix
 
 ```bash
-code --install-extension ptc-agent-0.1.1.vsix
+code --install-extension ptc-agent-0.1.2.vsix
 ```
 
 ### 方式二：源码运行（F5 调试）
