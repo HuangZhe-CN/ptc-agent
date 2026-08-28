@@ -7,6 +7,7 @@ import { EditEvent } from './EditEvent'
 import { RunEvent } from './RunEvent'
 import { ErrorEvent } from './ErrorEvent'
 import { CompletionEvent } from './CompletionEvent'
+import { UserEvent } from './UserEvent'
 
 /**
  * Timeline（【设计稿】§08/§09）：按 reducer 之上的 events 装配事件组件族。
@@ -23,6 +24,7 @@ export function Timeline(): JSX.Element | null {
     <div className="timeline">
       {events.map(e => (
         <React.Fragment key={e.id}>
+          {e.type === 'user' && <UserEvent event={e} />}
           {e.type === 'thought' && <ThoughtEvent event={e} />}
           {e.type === 'explore' && <ExploreEvent event={e} />}
           {e.type === 'edit' && <EditEvent event={e} />}

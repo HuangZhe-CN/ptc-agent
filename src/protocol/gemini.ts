@@ -9,7 +9,16 @@ const LEVEL: Record<Quality, string> = { low: 'LOW', medium: 'MEDIUM', high: 'HI
 export function buildGeminiBody(req: StreamRequest): unknown {
   const contents: unknown[] = []
   for (const m of req.history) {
-    if (m.role === 'user') contents.push({ role: 'user', parts: [{ text: m.text }] })
+    if (m.role === 'user') {
+      // 带图时 text part 在前 + inlineData part；无图保持单 text part（零回归）
+      if (m.images?.length) {
+        const parts: unknown[] = [
+          ...(m.text ? [{ text: m.text }] : []),
+          ...m.images.map(img => ({ inlineData: { mimeType: img.mime, data: img.base64 } })),
+        ]
+        contents.push({ role: 'user', parts })
+      } else contents.push({ role: 'user', parts: [{ text: m.text }] })
+    }
     else if (m.role === 'toolResult') contents.push({ role: 'user', parts: [{ functionResponse: { name: 'run_code', response: { output: m.content, success: !m.isError } } }] })
     else {
       const turn: AssistantTurn = m.turn

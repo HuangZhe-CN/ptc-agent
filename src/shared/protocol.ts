@@ -7,13 +7,17 @@ export interface ModelInfo { id: string; label: string; supportsThinking: boolea
 export interface ProviderInfo { id: string; label: string; protocol: Protocol; baseUrl: string; models: ModelInfo[] }
 export interface ActiveModel { providerId: string; modelId: string; quality: Quality }
 
-export interface QueuedMessage { id: string; text: string }
+/** 聊天图片附件：mime 如 image/png，base64 为不带前缀的裸编码（气泡与三协议请求体各自拼装） */
+export interface ChatImage { mime: string; base64: string }
+
+export interface QueuedMessage { id: string; text: string; images?: ChatImage[] }
 export interface FileChangeSummary { path: string; add: number; del: number; kind: FileKind }
 /** Task 26：rpc listSessions 的结果元素（host 侧 SessionStore.list() 摘要） */
 export interface SessionSummary { sessionId: string; title: string; createdAt: number }
 
 export interface TimelineEventBase { id: string; ts: number }
 export type TimelineEvent =
+  | TimelineEventBase & { type: 'user'; text: string; images?: ChatImage[] }   // 回合起点的用户原文（气泡重放还原；images 为可选缩略图附件）
   | TimelineEventBase & { type: 'explore'; status: 'running' | 'done'; count: number; targets: string[] }
   | TimelineEventBase & { type: 'edit'; file: string; fileKind: FileKind; add: number; del: number }
   | TimelineEventBase & { type: 'thought'; status: 'running' | 'done'; startedAt: number; durationMs?: number; markdown: string; working: string }
@@ -52,7 +56,7 @@ export type HostMessage =
 
 export type WebviewMessage =
   | { type: 'ready' }
-  | { type: 'submit'; text: string }
+  | { type: 'submit'; text: string; images?: ChatImage[] }
   | { type: 'stop' }
   | { type: 'queueEdit'; id: string; text: string }
   | { type: 'queueDelete'; id: string }

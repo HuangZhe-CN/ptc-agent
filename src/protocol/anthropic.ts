@@ -9,7 +9,16 @@ export const THINKING_BUDGET: Record<Quality, number> = { low: 1024, medium: 409
 export function buildAnthropicBody(req: StreamRequest): unknown {
   const messages: unknown[] = []
   for (const m of req.history) {
-    if (m.role === 'user') messages.push({ role: 'user', content: [{ type: 'text', text: m.text }] })
+    if (m.role === 'user') {
+      // 带图时 text 块在前 + image 块（base64 source）；无图保持单 text 块（零回归）
+      if (m.images?.length) {
+        const content: unknown[] = [
+          ...(m.text ? [{ type: 'text', text: m.text }] : []),
+          ...m.images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mime, data: img.base64 } })),
+        ]
+        messages.push({ role: 'user', content })
+      } else messages.push({ role: 'user', content: [{ type: 'text', text: m.text }] })
+    }
     else if (m.role === 'toolResult') messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: m.callId, content: m.content, is_error: m.isError }] })
     else {
       const turn: AssistantTurn = m.turn

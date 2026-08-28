@@ -35,6 +35,20 @@ describe('buildOpenAiBody', () => {
     expect(asst.tool_calls[0]).toEqual({ id: 'c1', type: 'function', function: { name: 'run_code', arguments: '{"code":"1","description":"d"}' } })
     expect(body.messages[2]).toEqual({ role: 'tool', tool_call_id: 'c1', content: '{"value":1}' })
   })
+  it('无图 user 保持纯字符串 content（零回归）；带图升级为图文混排数组、纯图省略 text 块', () => {
+    const img = { mime: 'image/png', base64: 'AAEC' }
+    const plain = buildOpenAiBody(baseReq([{ role: 'user', text: 'hi' }])) as Record<string, any>
+    expect(plain.messages[1]).toEqual({ role: 'user', content: 'hi' })   // 现状路径逐字节一致
+    const mixed = buildOpenAiBody(baseReq([{ role: 'user', text: '看这张图', images: [img] }])) as Record<string, any>
+    expect(mixed.messages[1]).toEqual({ role: 'user', content: [
+      { type: 'text', text: '看这张图' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAEC' } },
+    ] })
+    const onlyImage = buildOpenAiBody(baseReq([{ role: 'user', text: '', images: [img] }])) as Record<string, any>
+    expect(onlyImage.messages[1]).toEqual({ role: 'user', content: [
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAEC' } },
+    ] })
+  })
 })
 
 describe('openaiAdapter.stream', () => {

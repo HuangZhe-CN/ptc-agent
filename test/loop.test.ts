@@ -105,6 +105,27 @@ describe('AgentLoop', () => {
     expect(hasPhase(ops, 'error')).toBe(true)
   })
 
+  it('run 第三参 images 随首条 user 历史入请求；无图时不带 images 字段（零回归）', async () => {
+    const history: HistoryMessage[] = []
+    const { adapter, requests } = fakeAdapter([[{ type: 'text_delta', text: 'ok' }, { type: 'message_done', stopReason: 'end_turn' }]])
+    const loop = new AgentLoop(baseDeps({
+      adapter, runtime: fakeRuntime({ logs: [] }),
+      onHistory: m => history.push(m), getHistory: () => history,
+    }))
+    const images = [{ mime: 'image/png', base64: 'AAEC' }]
+    await loop.run('看图', new AbortController().signal, images)
+    expect(history[0]).toEqual({ role: 'user', text: '看图', images })
+    expect(requests[0].history[0]).toEqual({ role: 'user', text: '看图', images })   // 适配器请求体同源
+    // 无图路径：字段缺省而非空数组——与既有 JSONL 会话逐字节兼容
+    const history2: HistoryMessage[] = []
+    const second = new AgentLoop(baseDeps({
+      adapter, runtime: fakeRuntime({ logs: [] }),
+      onHistory: m => history2.push(m), getHistory: () => history2,
+    }))
+    await second.run('plain', new AbortController().signal)
+    expect(history2[0]).toEqual({ role: 'user', text: 'plain' })
+  })
+
   it('rateLimit 自动重试（退避 1s）：重放轮 completion 不含失败轮的部分文本', async () => {
     const ops: UiOp[] = []
     const history: HistoryMessage[] = []
@@ -209,6 +230,96 @@ describe('AgentLoop', () => {
     const errors = errorEvents(ops)
     expect(errors.some(m => m.includes('Stopped'))).toBe(true)
     expect(hasPhase(ops, 'completed')).toBe(true)
+  })
+
+  /** run 事件 patch 序列（按 append 的 run 事件 id 过滤），断言 outputTail 流式/终态 */
+  const runPatches = (ops: UiOp[]): Array<{ patch: Record<string, unknown> }> => {
+    const runId = (ops.find(o => o.op === 'append' && o.event.type === 'run') as { event: { id: string } } | undefined)?.event.id
+    return ops.filter(o => o.op === 'patch' && (o as { id: string }).id === runId) as Array<{ patch: Record<string, unknown> }>
+  }
+  const toolRound: StreamEvent[][] = [
+    [{ type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":"return 1","description":"d"}' }, { type: 'message_done', stopReason: 'tool_use' }],
+    [{ type: 'message_done', stopReason: 'end_turn' }],
+  ]
+
+  it('run_code 失败无 logs → error 态 outputTail 携带失败原因（kind+message），不再空输出', async () => {
+    const ops: UiOp[] = []
+    const loop = new AgentLoop(baseDeps({
+      adapter: fakeAdapter(toolRound).adapter,
+      runtime: fakeRuntime({ logs: [], error: { kind: 'exception', message: 'boom at line 1' } }),
+      emit: o => ops.push(...o),
+      onHistory: () => {}, getHistory: () => [],
+    }))
+    expect(await loop.run('x', new AbortController().signal)).toBe('completed')
+    expect(runPatches(ops).at(-1)!.patch).toEqual({ status: 'error', outputTail: 'exception: boom at line 1' })
+  })
+
+  it('run_code 失败且有前置 logs → 尾部日志 + 失败原因（错误时窗口收窄到 2 条给原因留位）', async () => {
+    const ops: UiOp[] = []
+    const loop = new AgentLoop(baseDeps({
+      adapter: fakeAdapter(toolRound).adapter,
+      runtime: fakeRuntime({ logs: ['L1', 'L2', 'L3', 'L4'], error: { kind: 'timeout', message: 'compute budget exhausted' } }),
+      emit: o => ops.push(...o),
+      onHistory: () => {}, getHistory: () => [],
+    }))
+    expect(await loop.run('x', new AbortController().signal)).toBe('completed')
+    expect(runPatches(ops).at(-1)!.patch).toEqual({ status: 'error', outputTail: 'L3\nL4\ntimeout: compute budget exhausted' })
+  })
+  it('V1：error.message 为长堆栈（原因首行+多帧，总长>600）→ 原因首行强制保留在 outputTail 头部', async () => {
+    const ops: UiOp[] = []
+    const frames = Array.from({ length: 12 }, (_, i) => `    at fn${i} (E:/very/long/path/module${i}.ts:${i + 10}:${i * 3})`)
+    const loop = new AgentLoop(baseDeps({
+      adapter: fakeAdapter(toolRound).adapter,
+      runtime: fakeRuntime({ logs: [], error: { kind: 'exception', message: ['Error: mock-boom', ...frames].join('\n') } }),
+      emit: o => ops.push(...o),
+      onHistory: () => {}, getHistory: () => [],
+    }))
+    expect(await loop.run('x', new AbortController().signal)).toBe('completed')
+    const tail = runPatches(ops).at(-1)!.patch.outputTail as string
+    expect(tail.startsWith('exception: Error: mock-boom')).toBe(true)   // kind 前缀 + 原因首行打头，不再被 node 内部帧挤出窗口
+    expect(tail).toContain('at fn0')                                     // 栈顶帧（紧邻 throw）保留
+    expect(tail).not.toContain('at fn11')                                // 帧数截断：仅前 5 帧
+    expect(tail.length).toBeLessThanOrEqual(500)                         // 有界语义维持
+  })
+
+  it('onLog 流式：执行中每条 console.log 即刻 patch run 事件 outputTail（尾部窗口 3 条，不等结束）', async () => {
+    const ops: UiOp[] = []
+    const runtime = {
+      run: async (opts: RunOptions): Promise<CodeRunResult> => {
+        opts.onLog?.('L1')
+        opts.onLog?.('L2')
+        opts.onLog?.('L3')
+        opts.onLog?.('L4')
+        return { logs: ['L1', 'L2', 'L3', 'L4'] }
+      },
+    }
+    const loop = new AgentLoop(baseDeps({
+      adapter: fakeAdapter(toolRound).adapter,
+      runtime,
+      emit: o => ops.push(...o),
+      onHistory: () => {}, getHistory: () => [],
+    }))
+    expect(await loop.run('x', new AbortController().signal)).toBe('completed')
+    expect(runPatches(ops).map(p => p.patch)).toEqual([
+      { outputTail: 'L1' },
+      { outputTail: 'L1\nL2' },
+      { outputTail: 'L1\nL2\nL3' },
+      { outputTail: 'L2\nL3\nL4' },
+      { status: 'done', outputTail: 'L2\nL3\nL4' },
+    ])
+  })
+
+  it('成功且无 logs → outputTail 保持空串（无输出占位不回归）', async () => {
+    const ops: UiOp[] = []
+    const loop = new AgentLoop(baseDeps({
+      adapter: fakeAdapter(toolRound).adapter,
+      runtime: fakeRuntime({ logs: [] }),
+      emit: o => ops.push(...o),
+      onHistory: () => {}, getHistory: () => [],
+    }))
+    expect(await loop.run('x', new AbortController().signal)).toBe('completed')
+    expect(runPatches(ops)).toHaveLength(1)
+    expect(runPatches(ops)[0].patch).toEqual({ status: 'done', outputTail: '' })
   })
 
   it('程序内工具调用经 DispatchPool：explore/edit/run UiOp、changes 快照、beforeEdit 先于执行', async () => {

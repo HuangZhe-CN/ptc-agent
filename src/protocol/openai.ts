@@ -10,7 +10,15 @@ const STOP_MAP: Record<string, 'tool_use' | 'end_turn' | 'max_tokens' | 'other'>
 export function buildOpenAiBody(req: StreamRequest): unknown {
   const messages: unknown[] = [{ role: 'system', content: req.system }]
   for (const m of req.history) {
-    if (m.role === 'user') messages.push({ role: 'user', content: m.text })
+    if (m.role === 'user') {
+      // 带图时 content 升级为数组（text 块在前，空文本省略）；无图保持纯字符串（零回归）
+      if (m.images?.length) {
+        messages.push({ role: 'user', content: [
+          ...(m.text ? [{ type: 'text', text: m.text }] : []),
+          ...m.images.map(img => ({ type: 'image_url', image_url: { url: `data:${img.mime};base64,${img.base64}` } })),
+        ] })
+      } else messages.push({ role: 'user', content: m.text })
+    }
     else if (m.role === 'toolResult') messages.push({ role: 'tool', tool_call_id: m.callId, content: m.content })
     else {
       const turn: AssistantTurn = m.turn

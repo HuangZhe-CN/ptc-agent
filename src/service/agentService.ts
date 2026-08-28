@@ -1,5 +1,5 @@
 import * as path from 'node:path'
-import type { Protocol, WebviewMessage, UiOp, TimelineEvent, QueuedMessage, FileChangeSummary, SessionPhase, WebviewState } from '../shared/protocol'
+import type { Protocol, WebviewMessage, UiOp, TimelineEvent, QueuedMessage, FileChangeSummary, SessionPhase, WebviewState, ChatImage } from '../shared/protocol'
 import { initialWebviewState } from '../shared/protocol'
 import { ConfigStore } from './configStore'
 import { WebviewBridge } from './webviewBridge'
@@ -46,7 +46,7 @@ export interface AgentServiceDeps { config: ConfigStore; api: VscodeApi; bridge:
 
 export class AgentService {
   /** 测试钩子（公开属性）：覆盖真实 AgentLoop 装配；null 时走 defaultLoop。 */
-  public loopFactory: ((userText: string, provider: ResolvedProvider, signal: AbortSignal) => Promise<'completed' | 'error' | 'aborted'>) | null = null
+  public loopFactory: ((userText: string, provider: ResolvedProvider, signal: AbortSignal, images?: ChatImage[]) => Promise<'completed' | 'error' | 'aborted'>) | null = null
 
   private sessionId: string | null = null
   private events: TimelineEvent[] = []
@@ -113,12 +113,12 @@ export class AgentService {
     switch (m.type) {
       case 'submit': {
         if (this.phase === 'running' || this.turnInFlight) {
-          this.queue = [...this.queue, { id: `q${Date.now().toString(36)}-${++this.idSeq}`, text: m.text }]
+          this.queue = [...this.queue, { id: `q${Date.now().toString(36)}-${++this.idSeq}`, text: m.text, ...(m.images?.length ? { images: m.images } : {}) }]
           this.emit([{ op: 'queue', queue: this.queue }])
           return
         }
         this.turnInFlight = true
-        try { await this.runTurn(m.text) } finally { this.turnInFlight = false }
+        try { await this.runTurn(m.text, m.images) } finally { this.turnInFlight = false }
         return
       }
       case 'stop': this.abort?.abort('user stop'); return
@@ -131,7 +131,7 @@ export class AgentService {
         this.queue = this.queue.filter(q => q.id !== m.id)
         this.emit([{ op: 'queue', queue: this.queue }])
         this.turnInFlight = true
-        try { await this.runTurn(item.text) } finally { this.turnInFlight = false }
+        try { await this.runTurn(item.text, item.images) } finally { this.turnInFlight = false }
         return
       }
       case 'selectModel': await this.deps.config.setActive(m.active); await this.bootSnapshot(); return
@@ -246,7 +246,11 @@ export class AgentService {
     await this.bootSnapshot()
   }
 
-  private async runTurn(userText: string): Promise<void> {
+  private async runTurn(userText: string, images?: ChatImage[]): Promise<void> {
+    // 回合起点上屏用户消息：先建会话再 emit——无 provider/配置异常时气泡与错误同样可见，且 JSONL 重放还原。
+    // 直发/queueSubmitNow/队列出队三条路径都经 runTurn 此处汇合；images 原样入事件（无图不带字段，逐字节兼容旧会话）。
+    if (!this.sessionId) await this.openSession(null, { reset: false })
+    this.emit([{ op: 'append', event: { id: `u${++this.idSeq}`, ts: Date.now(), type: 'user', text: userText, ...(images?.length ? { images } : {}) } }])
     const active = await this.deps.config.getActive()
     if (!active) {
       this.emit([
@@ -255,9 +259,15 @@ export class AgentService {
       ])
       return
     }
-    if (!this.sessionId) await this.openSession(null, { reset: false })
     const providerInfo = (await this.deps.config.getProviders()).find(p => p.id === active.providerId)
-    if (!providerInfo) return
+    if (!providerInfo) {
+      // active 指向已删除的 provider：原先静默返回会让已上屏的用户消息无任何下文——补错误反馈
+      this.emit([
+        { op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'Selected provider no longer exists' } },
+        { op: 'phase', phase: 'idle' },
+      ])
+      return
+    }
     const apiKey = (await this.deps.config.getApiKey(active.providerId)) ?? ''
     const provider: ResolvedProvider = { info: providerInfo, apiKey, modelId: active.modelId, quality: active.quality,
       thinkingMode: await this.deps.config.getThinkingMode(active.providerId, active.modelId) }
@@ -267,18 +277,18 @@ export class AgentService {
     this.emit([{ op: 'title', title }])
     this.abort = new AbortController()
     const run = this.loopFactory
-      ? this.loopFactory(userText, provider, this.abort.signal)
-      : this.defaultLoop(userText, provider, ADAPTERS[providerInfo.protocol])
+      ? this.loopFactory(userText, provider, this.abort.signal, images)
+      : this.defaultLoop(userText, provider, ADAPTERS[providerInfo.protocol], images)
     const outcome = await run
     this.abort = null
     if (outcome !== 'aborted') {
       const next = this.queue.shift()
-      if (next) { this.emit([{ op: 'queue', queue: this.queue }]); await this.runTurn(next.text) }
+      if (next) { this.emit([{ op: 'queue', queue: this.queue }]); await this.runTurn(next.text, next.images) }
     }
   }
 
   /** 真实 AgentLoop 装配：CodeRuntime + 6 工具 + 快照 tracker + 会话历史。 */
-  private async defaultLoop(userText: string, provider: ResolvedProvider, adapter: ProtocolAdapter): Promise<'completed' | 'error' | 'aborted'> {
+  private async defaultLoop(userText: string, provider: ResolvedProvider, adapter: ProtocolAdapter, images?: ChatImage[]): Promise<'completed' | 'error' | 'aborted'> {
     const runtime = new CodeRuntime(this.deps.workerPath)
     const tracker = this.tracker
     const loop = new AgentLoop({
@@ -296,7 +306,7 @@ export class AgentService {
       } : undefined,
       newEventId: () => `e${++this.idSeq}`,
     })
-    try { return await loop.run(userText, this.abort!.signal) }
+    try { return await loop.run(userText, this.abort!.signal, images) }
     finally { await runtime.dispose() }
   }
 }

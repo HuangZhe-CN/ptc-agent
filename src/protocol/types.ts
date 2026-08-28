@@ -1,8 +1,8 @@
-import type { StreamEvent, ProviderInfo, Quality } from '../shared/protocol'
+import type { StreamEvent, ProviderInfo, Quality, ChatImage } from '../shared/protocol'
 
 /** 模型历史（协议中立视图 + 协议原生回放信封） */
 export type HistoryMessage =
-  | { role: 'user'; text: string }
+  | { role: 'user'; text: string; images?: ChatImage[] }
   | { role: 'assistant'; turn: AssistantTurn }
   | { role: 'toolResult'; callId: string; content: string; isError: boolean }
 

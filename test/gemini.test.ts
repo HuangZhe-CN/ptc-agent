@@ -28,6 +28,20 @@ describe('buildGeminiBody', () => {
     expect(body.contents[0]).toEqual({ role: 'model', parts: [{ text: 'T', thought: true }, { functionCall: { name: 'run_code', args: { code: '1', description: 'd' } }, thoughtSignature: 'SIG' }] })
     expect(body.contents[1]).toEqual({ role: 'user', parts: [{ functionResponse: { name: 'run_code', response: { output: 'R', success: true } } }] })
   })
+  it('无图 user 保持单 text part（零回归）；带图渲染 inlineData、纯图省略 text part', () => {
+    const img = { mime: 'image/webp', base64: 'AAEC' }
+    const plain = buildGeminiBody(req({ history: [{ role: 'user', text: 'hi' }] })) as Record<string, any>
+    expect(plain.contents[0]).toEqual({ role: 'user', parts: [{ text: 'hi' }] })
+    const mixed = buildGeminiBody(req({ history: [{ role: 'user', text: '看这张图', images: [img] }] })) as Record<string, any>
+    expect(mixed.contents[0]).toEqual({ role: 'user', parts: [
+      { text: '看这张图' },
+      { inlineData: { mimeType: 'image/webp', data: 'AAEC' } },
+    ] })
+    const onlyImage = buildGeminiBody(req({ history: [{ role: 'user', text: '', images: [img] }] })) as Record<string, any>
+    expect(onlyImage.contents[0]).toEqual({ role: 'user', parts: [
+      { inlineData: { mimeType: 'image/webp', data: 'AAEC' } },
+    ] })
+  })
 })
 
 describe('geminiAdapter.stream', () => {

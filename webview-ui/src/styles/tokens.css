@@ -290,6 +290,54 @@ code, .codePill { font-family: var(--vscode-editor-font-family, monospace); font
 }
 .composerInput::placeholder { color: var(--agent-placeholder); }
 
+/* ---------- Composer 附件条（粘贴/选择的图片缩略图 chip；§12 Composer 内嵌层） ---------- */
+.attachStrip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--scale) * 6px);
+  padding: 0 calc(var(--scale) * 18px) calc(var(--scale) * 4px);
+}
+.attachChip {
+  position: relative;
+  width: calc(var(--scale) * 44px);        /* 382w = 22px */
+  height: calc(var(--scale) * 44px);
+  border-radius: calc(var(--scale) * 8px);
+  overflow: hidden;
+  background: var(--agent-secondary-bg);
+  flex: none;
+}
+.attachChip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.attachRemove {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 0 0 0 calc(var(--scale) * 8px);
+  padding: 0;
+  background: var(--agent-popover-bg);
+  color: var(--agent-fg);
+  cursor: pointer;
+}
+.attachRemove .codicon { font-size: 12px; }
+.attachRemove:hover { background: var(--agent-toolbar-hover); color: var(--agent-error); }
+.attachNotice {
+  color: var(--agent-error);
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .composerActions {
   display: flex;
   align-items: center;                          /* baseline 对齐（§07.1） */
@@ -607,6 +655,40 @@ button.eventHeader:focus-visible { outline: 1px solid var(--agent-focus); outlin
   white-space: nowrap;
 }
 
+/* ---------- User（用户消息气泡：右对齐、input 底、pre-wrap 保留换行） ---------- */
+.userRow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;                    /* 与 assistant 一级事件（左起点）区分对话双方 */
+}
+.userBubble {
+  max-width: 85%;
+  min-width: 0;
+  padding: 5px 10px;
+  border-radius: var(--r-pill);
+  background: var(--agent-input-bg);
+  color: var(--agent-input-fg);
+  line-height: 1.55;
+  white-space: pre-wrap;                    /* 保留用户输入的换行 */
+  overflow-wrap: anywhere;
+}
+
+/* 用户气泡缩略图（带图消息：图上文下，等宽网格收拢多图） */
+.userImages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.userImages:empty { margin-bottom: 0; }
+.userImage {
+  max-width: calc(var(--scale) * 320px);    /* 382w = 160px */
+  max-height: calc(var(--scale) * 240px);
+  border-radius: calc(var(--scale) * 8px);
+  object-fit: contain;
+  display: block;
+}
+
 /* ---------- Error（§08.2：单行 codicon-error + message，error 色） ---------- */
 .errorRow .eventIcon { color: var(--agent-error); }
 .errorMessage {
@@ -622,7 +704,11 @@ button.eventHeader:focus-visible { outline: 1px solid var(--agent-focus); outlin
 /* ---------- High Contrast 补边框（§3.5/§20.2：块级代码/输出容器不能只靠底色差） ---------- */
 body.vscode-high-contrast .mdCodeBlock,
 body.vscode-high-contrast .runOutput,
+body.vscode-high-contrast .userBubble,
+body.vscode-high-contrast .attachChip,
 body.vscode-high-contrast-light .mdCodeBlock,
-body.vscode-high-contrast-light .runOutput {
+body.vscode-high-contrast-light .runOutput,
+body.vscode-high-contrast-light .userBubble,
+body.vscode-high-contrast-light .attachChip {
   border: 1px solid var(--agent-contrast-border);
 }

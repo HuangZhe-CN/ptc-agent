@@ -39,6 +39,20 @@ describe('buildAnthropicBody', () => {
     expect(body.messages[0].content).toEqual(([{ type: 'thinking', thinking: 'T', signature: 'SIG' }, { type: 'tool_use', id: 'tu1', name: 'run_code', input: { code: '1', description: 'd' } }]))
     expect(body.messages[1]).toEqual({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'R', is_error: true }] })
   })
+  it('无图 user 保持单 text 块（零回归）；带图渲染 image base64 source、纯图省略 text 块', () => {
+    const img = { mime: 'image/jpeg', base64: 'AAEC' }
+    const plain = buildAnthropicBody(req({ history: [{ role: 'user', text: 'hi' }] })) as Record<string, any>
+    expect(plain.messages[0]).toEqual({ role: 'user', content: [{ type: 'text', text: 'hi' }] })
+    const mixed = buildAnthropicBody(req({ history: [{ role: 'user', text: '看这张图', images: [img] }] })) as Record<string, any>
+    expect(mixed.messages[0]).toEqual({ role: 'user', content: [
+      { type: 'text', text: '看这张图' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'AAEC' } },
+    ] })
+    const onlyImage = buildAnthropicBody(req({ history: [{ role: 'user', text: '', images: [img] }] })) as Record<string, any>
+    expect(onlyImage.messages[0]).toEqual({ role: 'user', content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'AAEC' } },
+    ] })
+  })
 })
 
 describe('anthropicAdapter.stream', () => {

@@ -10,6 +10,12 @@ const dicts: Record<Locale, Record<string, string>> = {
     'composer.placeholder': '随便问点什么…',
     'composer.send': '发送',
     'composer.stop': '停止',
+    /* 图片附件（粘贴/选择/删除/上限提示） */
+    'composer.addImage': '添加图片',
+    'composer.removeImage': '删除图片',
+    'composer.imageLimit': '最多 4 张图片',
+    'composer.imageUnsupported': '仅支持 PNG/JPEG/WebP/GIF 图片',
+    'composer.imageDropped': 'GIF 图片不被当前模型协议支持，已忽略',
     'rail.reviewChanges': '审阅更改',
     /* utility rail 图标 + header 管理/收起（workbenchAction 接线） */
     'rail.files': '资源管理器',
@@ -36,13 +42,19 @@ const dicts: Record<Locale, Record<string, string>> = {
     'event.edit.label': '已编辑',
     'event.run.running': '运行中…',
     'event.run.done': '已运行',
-    'event.run.error': '已运行',
+    'event.run.error': '运行失败',
     'event.run.noOutput': '（无输出）',
   },
   en: {
     'composer.placeholder': 'Ask anything…',
     'composer.send': 'Send',
     'composer.stop': 'Stop',
+    /* Image attachments (paste/pick/remove/limit notices) */
+    'composer.addImage': 'Add image',
+    'composer.removeImage': 'Remove image',
+    'composer.imageLimit': 'Up to 4 images',
+    'composer.imageUnsupported': 'Only PNG/JPEG/WebP/GIF images are supported',
+    'composer.imageDropped': 'GIF images are not supported by the active model protocol and were ignored',
     'rail.reviewChanges': 'Review Changes',
     /* Utility rail icons + header manage/close (workbenchAction wiring) */
     'rail.files': 'Explorer',
@@ -69,7 +81,7 @@ const dicts: Record<Locale, Record<string, string>> = {
     'event.edit.label': 'Edited',
     'event.run.running': 'Running…',
     'event.run.done': 'Ran',
-    'event.run.error': 'Ran',
+    'event.run.error': 'Run failed',
     'event.run.noOutput': '(no output)',
   },
 }

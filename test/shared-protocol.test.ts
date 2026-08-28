@@ -28,4 +28,27 @@ describe('applyUiOps', () => {
     s = applyUiOps(s, [{ op: 'remove', id: 'c1' }, { op: 'remove', id: 'nope' }])
     expect(s.events.map(e => e.id)).toEqual(['t1', 't2'])
   })
+  it('user 事件 append 保留原文与换行，且位于 assistant 事件之前（重放还原用户气泡）', () => {
+    let s = initialWebviewState('en')
+    s = applyUiOps(s, [
+      { op: 'append', event: { id: 'u1', ts: 1, type: 'user', text: '你好\n第二行' } },
+      { op: 'append', event: ev('t1', {}) },
+    ])
+    const u = s.events[0] as Extract<TimelineEvent, { type: 'user' }>
+    expect(u.type).toBe('user')
+    expect(u.text).toBe('你好\n第二行')   // 换行原样保留，webview pre-wrap 才有意义
+    expect(s.events.map(e => e.id)).toEqual(['u1', 't1'])   // user 在前、assistant 在后
+  })
+  it('user 事件 images 原样随事件保留（气泡缩略图重放还原）；无图事件不含 images 字段', () => {
+    const images = [{ mime: 'image/png', base64: 'AAEC' }]
+    let s = initialWebviewState('en')
+    s = applyUiOps(s, [
+      { op: 'append', event: { id: 'u1', ts: 1, type: 'user', text: '看图', images } },
+      { op: 'append', event: { id: 'u2', ts: 2, type: 'user', text: '纯文本' } },
+    ])
+    const withImg = s.events[0] as Extract<TimelineEvent, { type: 'user' }>
+    expect(withImg.images).toEqual(images)
+    const plain = s.events[1] as Extract<TimelineEvent, { type: 'user' }>
+    expect('images' in plain).toBe(false)   // 无图路径字段缺省——与既有 JSONL 会话兼容
+  })
 })

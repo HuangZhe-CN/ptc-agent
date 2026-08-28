@@ -1,4 +1,4 @@
-import type { StreamEvent, FileChangeSummary } from '../shared/protocol'
+import type { StreamEvent, FileChangeSummary, ChatImage } from '../shared/protocol'
 import type { ProtocolAdapter, ResolvedProvider, HistoryMessage, AssistantTurn } from '../protocol/types'
 import type { CodeRuntime } from '../runtime/codeRuntime'
 import { DispatchPool, type DispatchEvent } from '../runtime/dispatchPool'
@@ -27,6 +27,18 @@ export interface LoopDeps {
 
 const defaultDelay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
+/**
+ * run 事件错误行组装（V1）：worker 对 exception 上报完整 error.stack（截 4096），原因首行在栈头。
+ * 若把整段 message 原样拼进窗口再整体尾截 500，首行会被 Module._compile 之类 node 内部帧挤出。
+ * 故「kind: 原因首行」强制打头，仅跟栈顶前 5 帧（紧邻 throw 的帧最有价值），整体维持 500 字符有界。
+ */
+const formatRunErrorLine = (error: { kind: string; message: string }): string => {
+  const [first = '', ...frames] = error.message.split('\n')
+  const head = `${error.kind}: ${first}`.slice(0, 500)
+  if (!frames.length || head.length >= 500) return head
+  return `${head}\n${frames.slice(0, 5).join('\n')}`.slice(0, 500)
+}
+
 export class AgentLoop {
   private round = 0
   private retries = 0
@@ -45,9 +57,10 @@ export class AgentLoop {
 
   constructor(private readonly d: LoopDeps) {}
 
-  async run(userText: string, signal: AbortSignal): Promise<'completed' | 'error' | 'aborted'> {
+  async run(userText: string, signal: AbortSignal, images?: ChatImage[]): Promise<'completed' | 'error' | 'aborted'> {
     const d = this.d
-    d.onHistory({ role: 'user', text: userText })
+    // 图片随首条 user 历史进入请求体（三适配器按协议渲染）；无图时不带 images 字段（JSONL 与现状逐字节一致）
+    d.onHistory({ role: 'user', text: userText, ...(images?.length ? { images } : {}) })
     d.emit([{ op: 'phase', phase: 'submitting' }, { op: 'phase', phase: 'running' }])
     while (true) {
       if (signal.aborted) return this.abort(signal)
@@ -287,14 +300,27 @@ export class AgentLoop {
           return pool.submit(name, a)
         }
       }
-      const result = await d.runtime.run({ program: turn.toolCall!.args.code, bindings, signal })
+      // onLog 流式接线：console.log 到达即 patch outputTail，执行期间输出可见（CodeRuntime.run 的 RunOptions.onLog）
+      const liveLogs: string[] = []
+      const result = await d.runtime.run({
+        program: turn.toolCall!.args.code, bindings, signal,
+        onLog: text => {
+          liveLogs.push(text)
+          d.emit([{ op: 'patch', id: runEventId, patch: { outputTail: liveLogs.slice(-3).join('\n').slice(-500) } as never }])
+        },
+      })
       await pool.settle()
       const content = JSON.stringify({
         logs: result.logs,
         ...(result.value !== undefined ? { value: result.value } : {}),
         ...(result.error ? { error: result.error } : {}),
       })
-      d.emit([{ op: 'patch', id: runEventId, patch: { status: result.error ? 'error' : 'done', outputTail: result.logs.slice(-3).join('\n').slice(-500) } as never }])
+      // error 态不再空输出：失败原因（kind+message）附在末尾（错误时日志窗口收窄到 2 条给原因留位）；
+      // 成功且无 logs 仍为空串，UI 显示无输出占位
+      const outputTail = (result.error
+        ? [...result.logs.slice(-2), formatRunErrorLine(result.error)]
+        : result.logs.slice(-3)).join('\n').slice(-500)
+      d.emit([{ op: 'patch', id: runEventId, patch: { status: result.error ? 'error' : 'done', outputTail } as never }])
       return { content, isError: !!result.error }
     } catch (error: unknown) {
       pool.abortPending('run aborted')
