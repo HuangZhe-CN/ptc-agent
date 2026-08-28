@@ -20,7 +20,7 @@
 ### 方式一：安装 .vsix
 
 ```bash
-code --install-extension ptc-agent-0.1.2.vsix
+code --install-extension ptc-agent-<版本>.vsix   # 版本见根 package.json 的 version 字段；发版产物为仓库根目录 ptc-agent-x.y.z.vsix
 ```
 
 ### 方式二：源码运行（F5 调试）

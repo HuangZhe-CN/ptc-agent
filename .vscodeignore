@@ -8,9 +8,10 @@
 # sourcemap（排除）
 **/*.map
 
-# 源码与测试（打包只含构建产物）
+# 源码与测试（打包只含构建产物；dist/test 仅 test:vscode 从磁盘使用，不入包）
 src/**
 test/**
+dist/test/**
 webview-ui/src/**
 
 # 依赖
@@ -36,6 +37,7 @@ docs/**
 .vscode/**
 .git/**
 .gitignore
+.agent-teams/**
 
 # 本地调试/审计临时产物（QA 脚本、截图、临时 VS Code profile/workspace）
 .tmp-*
@@ -43,4 +45,3 @@ docs/**
 .preview.log
 shot-*.png
 *.vsix
-archive/**

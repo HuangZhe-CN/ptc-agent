@@ -27,3 +27,12 @@ Thumbs.db
 .tmp-*
 shot-*.png
 .preview.log
+
+# AgentTeams 任务板
+.agent-teams/
+.tmp-accept*.mjs
+.tmp-accept-kill.ps1
+.tmp-accept-shots/
+.tmp-accept-result.json
+.tmp-probe*
+.tmp-vsc-profile-*/
