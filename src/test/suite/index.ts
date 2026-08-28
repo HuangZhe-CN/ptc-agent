@@ -16,7 +16,7 @@ import { CodeRuntime } from '../../runtime/codeRuntime'
 import type { AgentService } from '../../service/agentService'
 import type { WebviewState } from '../../shared/protocol'
 
-const EXT_ID = 'ptc-agent.ptc-agent'
+const EXT_ID = 'ptcagent.ptc-agent'   // 与 package.json publisher 一致（47a2ce2 改 publisher 时本常量漏更，smoke 0/4 的根因）
 
 // ---- 极小测试 harness（顺序执行） ----
 type TestFn = () => void | Promise<void>
