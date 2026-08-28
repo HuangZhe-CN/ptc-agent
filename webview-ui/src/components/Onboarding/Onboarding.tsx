@@ -215,8 +215,10 @@ function QualitySeg(props: { locale: string; value: Quality; onChange: (q: Quali
 /**
  * Provider 管理视图（计划 Task 25「Header more 下拉」的目标组件；Task 26 挂接）。
  * 列出 state.providers + keyed 状态；添加（复用三步向导）；删除（两击确认 → deleteProvider）。
+ * onBack：从聊天视图（AgentView）进入时提供「返回聊天」出口；
+ * Onboarding 首启路径（hasProviders 自动渲染）不传——无来源可返回，行为保持不变。
  */
-export function ProviderManager(): JSX.Element {
+export function ProviderManager({ onBack }: { onBack?: () => void }): JSX.Element {
   const locale = useAgentStore(s => s.locale)
   const providers = useAgentStore(s => s.providers)
   const providerKeyed = useAgentStore(s => s.providerKeyed)
@@ -233,7 +235,16 @@ export function ProviderManager(): JSX.Element {
 
   return (
     <div className="obRoot">
-      <h2 className="obTitle">{ob(locale, 'manage.title')}</h2>
+      {/* obActions 自带 space-between：标题居左、返回按钮居右，零新增 CSS */}
+      <div className="obActions">
+        <h2 className="obTitle">{ob(locale, 'manage.title')}</h2>
+        {onBack && (
+          <button type="button" className="obBtnSecondary" onClick={onBack}>
+            <i className="codicon codicon-arrow-left" aria-hidden="true" />
+            {ob(locale, 'manage.back')}
+          </button>
+        )}
+      </div>
       {providers.length === 0 && <p className="obHint">{ob(locale, 'manage.empty')}</p>}
       <div className="obProvList">
         {providers.map(p => {

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useAgentStore } from '../../store'
 import { t } from '../../i18n'
 import { useTailFollow } from '../../hooks/useTailFollow'
@@ -7,6 +7,7 @@ import { Composer } from '../Composer/Composer'
 import { Timeline } from '../Timeline/Timeline'
 import { ReviewPanel } from '../Review/ReviewPanel'
 import { ReviewActionBar } from '../Review/ReviewActionBar'
+import { ProviderManager } from '../Onboarding/Onboarding'
 
 /** 【设计稿】§0.1：录屏坐标系 764×1314 capture px，等比基准宽 */
 const DESIGN_WIDTH = 764
@@ -21,12 +22,15 @@ const DESIGN_WIDTH = 764
  * 天然 sticky，视觉上紧贴 Composer 上方，像第二层 Dock）。
  * Task 26：reviewOpen 迁入 store.ui（persistUi/setUiPref 统一收口，消除 window
  * CustomEvent hack——CompletionEvent 直接写 store）；agentScroll 接 useTailFollow（§14.1）。
+ * Header layout 按钮（原设计 §12.4「Provider 管理」入口）挂 ProviderManager：
+ * 走组件级 state 而非 store.ui——管理视图是一次性覆盖层，不持久化，重载后回聊天视图。
  */
 export function AgentView(): JSX.Element {
   const ref = useRef<HTMLElement | null>(null)
   const scrollRef = useRef<HTMLElement | null>(null)
   const reviewOpen = useAgentStore(s => s.ui.reviewOpen)
   const setUiPref = useAgentStore(s => s.setUiPref)
+  const [manageOpen, setManageOpen] = useState(false)
 
   useTailFollow(scrollRef)
 
@@ -47,12 +51,19 @@ export function AgentView(): JSX.Element {
 
   return (
     <section className="agentView" ref={ref}>
-      <AgentHeader />
+      <AgentHeader onOpenManage={() => setManageOpen(true)} />
       <main className="agentScroll" ref={scrollRef}>
-        <Timeline />
-        {reviewOpen && <ReviewPanel />}
+        {/* 管理视图整屏替代 Timeline；review 相关 UI 一并隐藏，避免浮在管理内容上 */}
+        {manageOpen ? (
+          <ProviderManager onBack={() => setManageOpen(false)} />
+        ) : (
+          <Timeline />
+        )}
+        {!manageOpen && reviewOpen && <ReviewPanel />}
       </main>
-      {reviewOpen && <ReviewActionBar onClose={() => setUiPref({ reviewOpen: false })} />}
+      {!manageOpen && reviewOpen && (
+        <ReviewActionBar onClose={() => setUiPref({ reviewOpen: false })} />
+      )}
       <footer className="agentDock">
         <UtilityRail />
         <Composer />
@@ -66,12 +77,29 @@ function UtilityRail(): JSX.Element {
   const changes = useAgentStore(s => s.changes)
   const send = useAgentStore(s => s.send)
   const locale = useAgentStore(s => s.locale)
+  // 原为纯装饰 span（用户反馈「无法点击」）；现接 host 的 workbenchAction：
+  // 聚焦资源管理器/终端、开文件夹、开简单浏览器。icon 作子元素 + aria-hidden，
+  // 可访问名走 aria-label（与 AgentHeader iconButton 同 idiom）。
+  const railActions = [
+    { icon: 'codicon-files', key: 'rail.files', action: 'focusExplorer' },
+    { icon: 'codicon-terminal', key: 'rail.terminal', action: 'focusTerminal' },
+    { icon: 'codicon-folder', key: 'rail.folder', action: 'openFolder' },
+    { icon: 'codicon-browser', key: 'rail.browser', action: 'openBrowser' },
+  ] as const
   return (
     <div className="utilityRail">
-      <span className="railIcon codicon codicon-files" aria-hidden="true" />
-      <span className="railIcon codicon codicon-terminal" aria-hidden="true" />
-      <span className="railIcon codicon codicon-folder" aria-hidden="true" />
-      <span className="railIcon codicon codicon-browser" aria-hidden="true" />
+      {railActions.map(item => (
+        <button
+          key={item.action}
+          type="button"
+          className="railIcon"
+          aria-label={t(locale, item.key)}
+          title={t(locale, item.key)}
+          onClick={() => send({ type: 'workbenchAction', action: item.action })}
+        >
+          <i className={`codicon ${item.icon}`} aria-hidden="true" />
+        </button>
+      ))}
       <span className="railSpacer" />
       {changes.length > 0 && (
         <button

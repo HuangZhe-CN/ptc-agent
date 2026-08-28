@@ -22,3 +22,8 @@ dist/test/
 .DS_Store
 Thumbs.db
 .superpowers/
+
+# 本地调试/审计临时产物（QA 脚本、截图、临时 VS Code profile/workspace）
+.tmp-*
+shot-*.png
+.preview.log

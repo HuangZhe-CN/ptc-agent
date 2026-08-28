@@ -31,6 +31,14 @@ export function activate(context: vscode.ExtensionContext): void {
       const root = wsRoot() ?? process.cwd()
       await openSnapshotDiff(sessionId, relPath, path.resolve(root, relPath))
     },
+    executeCommand: async (command, ...args) => { await vscode.commands.executeCommand(command, ...args) },
+    showInputBox: async opts => vscode.window.showInputBox({ prompt: opts.prompt, value: opts.value }),
+    showInfoMessage: async msg => { await vscode.window.showInformationMessage(msg) },
+    openSimpleBrowser: async url => {
+      // Simple Browser 需要带 scheme 的绝对 URI；裸域名补 https://（不做更多校验）
+      const uri = vscode.Uri.parse(/^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `https://${url}`)
+      await vscode.commands.executeCommand('simpleBrowser.api.open', uri)
+    },
   }
 
   // 快照只读内容提供者：uri → 当前会话 tracker 的快照原文

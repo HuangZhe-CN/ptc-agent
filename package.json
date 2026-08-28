@@ -3,7 +3,11 @@
   "displayName": "PTC Agent",
   "description": "Minimal, fast coding agent (Pure-Then-Code mode)",
   "version": "0.1.1",
-  "publisher": "ptc-agent",
+  "publisher": "ptcagent",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HuangZhe-CN/ptc-agent.git"
+  },
   "private": true,
   "engines": {
     "vscode": "^1.101.0"

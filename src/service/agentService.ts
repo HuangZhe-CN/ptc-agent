@@ -29,7 +29,18 @@ export interface VscodeApi {
   envLanguage(): string
   fs: VscodeFsApi
   openDiff(sessionId: string, relPath: string): Promise<void>
+  /** 执行 VS Code 命令：仅由 service 以硬编码字面量调用，严禁透传 webview 输入的命令名 */
+  executeCommand(command: string, ...args: unknown[]): Promise<unknown>
+  /** 弹输入框；返回 undefined = 用户取消 */
+  showInputBox(opts: { prompt: string; value?: string }): Promise<string | undefined>
+  /** 本地信息提示（workbenchAction 失败兜底） */
+  showInfoMessage(msg: string): Promise<void>
+  /** 用内置 Simple Browser 打开网址（Uri 构造与 scheme 归一封在宿主实现） */
+  openSimpleBrowser(url: string): Promise<void>
 }
+
+/** workbenchAction 的动作名单（protocol.ts 联合里该分支的 action 字段）。 */
+type WorkbenchAction = Extract<WebviewMessage, { type: 'workbenchAction' }>['action']
 
 export interface AgentServiceDeps { config: ConfigStore; api: VscodeApi; bridge: WebviewBridge; workerPath: string }
 
@@ -136,6 +147,7 @@ export class AgentService {
       case 'saveProviders': await this.deps.config.saveProviders(m.providers); if (m.active) await this.deps.config.setActive(m.active); await this.bootSnapshot(); return
       case 'saveApiKey': await this.deps.config.saveApiKey(m.providerId, m.apiKey); await this.bootSnapshot(); return
       case 'deleteProvider': await this.deps.config.deleteProvider(m.providerId); await this.bootSnapshot(); return
+      case 'workbenchAction': await this.handleWorkbenchAction(m.action); return
       case 'rpc': await this.handleRpc(m.reqId, m.method, m.params); return
       case 'ready': await this.bootSnapshot(); return   // 桥内部消化 ready 并经 onReady 触发；直连调用时兜底
     }
@@ -147,6 +159,28 @@ export class AgentService {
     if (rel) { if (action === 'accept') await this.tracker.drop(rel); else await this.tracker.restore(rel, cwd) }
     else for (const c of await this.tracker.changes(cwd)) { if (action === 'accept') await this.tracker.drop(c.path); else await this.tracker.restore(c.path, cwd) }
     this.emit([{ op: 'changes', changes: await this.tracker.changes(cwd).catch(() => [] as FileChangeSummary[]) }])
+  }
+
+  /** workbenchAction：action→命令白名单硬编码映射（webview 只传动作名，不可传命令串）；
+   *  openBrowser 先弹输入框（取消/空输入静默返回），再交宿主 Simple Browser 打开。
+   *  任何失败（命令不存在、Uri 解析等）统一降级为本地提示——bridge.onMessage 是 void 调用，上抛只会变成 unhandled rejection。 */
+  private async handleWorkbenchAction(action: WorkbenchAction): Promise<void> {
+    try {
+      switch (action) {
+        case 'focusExplorer': await this.deps.api.executeCommand('workbench.view.explorer'); return
+        case 'focusTerminal': await this.deps.api.executeCommand('workbench.action.terminal.focus'); return
+        case 'openFolder': await this.deps.api.executeCommand('workbench.action.files.openFolder'); return
+        case 'toggleSidebar': await this.deps.api.executeCommand('workbench.action.toggleSidebarVisibility'); return
+        case 'openBrowser': {
+          const url = (await this.deps.api.showInputBox({ prompt: 'Enter the URL to open' }))?.trim()
+          if (!url) return   // 用户取消或空输入：静默返回
+          await this.deps.api.openSimpleBrowser(url)
+          return
+        }
+      }
+    } catch {
+      await this.deps.api.showInfoMessage(action === 'openBrowser' ? 'Unable to open browser' : `Unable to run action: ${action}`)
+    }
   }
 
   /** listModels：providerId 可为空串（表单草稿），直接按 params.baseUrl 发请求，key 查不到用空串。

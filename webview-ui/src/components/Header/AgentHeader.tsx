@@ -10,10 +10,11 @@ import { HistoryDropdown } from './HistoryDropdown'
  * - 右四图标 ＋/history/more(layout)/close：16px glyph、28px 热区、hover=toolbar.hoverBackground
  *   圆底；close 不用红底；＋ → send({type:'newSession'})
  * - 背景与 --agent-bg 同色，固定不滚动（§2.2 header fixed）
- * - Task 26：history 图标接 HistoryDropdown（rpc listSessions → openSession）；
- *   more/layout 与 close 仍为可聚焦占位（后续任务接管）。
+ * - Task 26：history 图标接 HistoryDropdown（rpc listSessions → openSession）
+ * - layout（more）按设计 §12.4 原意接 Provider 管理视图（onOpenManage 由 AgentView 提供，
+ *   组件级 state，不动持久化 UiPrefs）；close → workbenchAction.toggleSidebar 收起侧栏。
  */
-export function AgentHeader(): JSX.Element {
+export function AgentHeader({ onOpenManage }: { onOpenManage: () => void }): JSX.Element {
   const title = useAgentStore(s => s.title)
   const send = useAgentStore(s => s.send)
   const locale = useAgentStore(s => s.locale)
@@ -54,10 +55,22 @@ export function AgentHeader(): JSX.Element {
             <HistoryDropdown anchorRef={historyBtnRef} onClose={() => setHistoryOpen(false)} />
           )}
         </span>
-        <button type="button" className="iconButton">
+        <button
+          type="button"
+          className="iconButton"
+          aria-label={t(locale, 'header.manage')}
+          title={t(locale, 'header.manage')}
+          onClick={onOpenManage}
+        >
           <i className="codicon codicon-layout" aria-hidden="true" />
         </button>
-        <button type="button" className="iconButton headerClose">
+        <button
+          type="button"
+          className="iconButton headerClose"
+          aria-label={t(locale, 'header.close')}
+          title={t(locale, 'header.close')}
+          onClick={() => send({ type: 'workbenchAction', action: 'toggleSidebar' })}
+        >
           <i className="codicon codicon-close" aria-hidden="true" />
         </button>
       </div>

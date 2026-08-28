@@ -112,6 +112,7 @@ body {
 
 .iconButton:hover { background: var(--agent-toolbar-hover); }
 .iconButton:focus-visible,
+.railIcon:focus-visible,
 .modelTrigger:focus-visible,
 .reviewButton:focus-visible,
 .composer:focus-within {
@@ -229,14 +230,20 @@ code, .codePill { font-family: var(--vscode-editor-font-family, monospace); font
   padding: 0 calc(var(--scale) * 4px);
   margin-bottom: calc(var(--scale) * 18px);   /* rail ↔ composer 间距 */
 }
+/* span → button（接 workbenchAction）：几何不变，补 button reset（原生 button 自带
+   底色/边框/padding，不清掉会比原 span 多出边距与灰底）；hover 同 iconButton 圆底 */
 .railIcon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 24px;                                /* §05 rail 热区 24–28 */
   height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
   border-radius: 6px;
   color: var(--agent-icon);
+  cursor: pointer;
 }
 .railIcon .codicon { font-size: 16px; }
 .railIcon:hover { background: var(--agent-toolbar-hover); }
@@ -392,7 +399,9 @@ body.vscode-high-contrast-light .primaryAction {
   border: 1px solid var(--agent-contrast-border);
 }
 body.vscode-high-contrast .iconButton:hover,
-body.vscode-high-contrast-light .iconButton:hover {
+body.vscode-high-contrast .railIcon:hover,
+body.vscode-high-contrast-light .iconButton:hover,
+body.vscode-high-contrast-light .railIcon:hover {
   outline: 1px solid var(--agent-contrast-border);
 }
 

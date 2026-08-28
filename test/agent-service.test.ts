@@ -110,3 +110,66 @@ describe('AgentService', () => {
     expect(finalState.events).toEqual([])
   })
 })
+
+describe('AgentService.workbenchAction', () => {
+  /** 最小夹具：记录命令调用与本地提示；输入框返回值用例内可控（api 对象动态取，构造后改属性仍生效）。 */
+  const setup = () => {
+    const calls: Array<{ command: string; args: unknown[] }> = []
+    const infos: string[] = []
+    let inputResult: string | undefined
+    const bridge = new WebviewBridge({ postMessage: async () => true })
+    const api = {
+      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs', envLanguage: () => 'en',
+      fs: { readDir: async () => [], readFile: async () => { throw new Error('nf') }, appendFile: async () => {}, mkdir: async () => {}, writeFile: async () => {} },
+      openDiff: async () => {},
+      executeCommand: async (command: string, ...args: unknown[]) => { calls.push({ command, args }) },
+      showInputBox: async () => inputResult,
+      showInfoMessage: async (msg: string) => { infos.push(msg) },
+      openSimpleBrowser: async (url: string) => { calls.push({ command: 'simpleBrowser.api.open', args: [url] }) },
+    }
+    const svc = new AgentService({ config: new ConfigStore(memorySecrets(), memoryMemento()), api: api as never, bridge, workerPath: 'x' })
+    return { svc, calls, infos, api, setInput: (v: string | undefined) => { inputResult = v } }
+  }
+
+  it('四个命令 action 触发硬编码白名单命令；openBrowser 输入 URL 交 openSimpleBrowser', async () => {
+    const { svc, calls, setInput } = setup()
+    await svc.handleWebviewMessage({ type: 'workbenchAction', action: 'focusExplorer' })
+    await svc.handleWebviewMessage({ type: 'workbenchAction', action: 'focusTerminal' })
+    await svc.handleWebviewMessage({ type: 'workbenchAction', action: 'openFolder' })
+    await svc.handleWebviewMessage({ type: 'workbenchAction', action: 'toggleSidebar' })
+    expect(calls.map(c => c.command)).toEqual([
+      'workbench.view.explorer',
+      'workbench.action.terminal.focus',
+      'workbench.action.files.openFolder',
+      'workbench.action.toggleSidebarVisibility',
+    ])
+    calls.length = 0
+    setInput('https://example.com')
+    await svc.handleWebviewMessage({ type: 'workbenchAction', action: 'openBrowser' })
+    expect(calls).toEqual([{ command: 'simpleBrowser.api.open', args: ['https://example.com'] }])
+  })
+
+  it('openBrowser：取消或空白输入不执行任何命令、不提示', async () => {
+    const { svc, calls, infos, setInput } = setup()
+    setInput(undefined)   // 用户取消
+    await svc.handleWebviewMessage({ type: 'workbenchAction', action: 'openBrowser' })
+    expect(calls).toEqual([])
+    expect(infos).toEqual([])
+    setInput('   ')   // 纯空白：trim 后视为取消
+    await svc.handleWebviewMessage({ type: 'workbenchAction', action: 'openBrowser' })
+    expect(calls).toEqual([])
+    expect(infos).toEqual([])
+  })
+
+  it('executeCommand/openSimpleBrowser reject：降级 showInfoMessage 且不向外抛出', async () => {
+    const { svc, infos, api, setInput } = setup()
+    api.executeCommand = async () => { throw new Error('command not found') }
+    await expect(svc.handleWebviewMessage({ type: 'workbenchAction', action: 'focusExplorer' })).resolves.toBeUndefined()
+    expect(infos).toEqual(['Unable to run action: focusExplorer'])
+
+    api.openSimpleBrowser = async () => { throw new Error('no simple browser') }
+    setInput('https://example.com')
+    await expect(svc.handleWebviewMessage({ type: 'workbenchAction', action: 'openBrowser' })).resolves.toBeUndefined()
+    expect(infos).toEqual(['Unable to run action: focusExplorer', 'Unable to open browser'])
+  })
+})
