@@ -52,6 +52,10 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     else if (msg.type === 'ops') set(s => ({ ...applyUiOps(s, msg.ops) }))
     // rpcResult 由调用处通过回调消费（组件用 pendingRpc map；简化：存最近结果）
     else if (msg.type === 'rpcResult') set({ lastRpc: msg })
+    // P2：changes 清空（新回合/清屏/新会话）时自动收起空审阅面板，
+    // 避免 reviewOpen 持久化导致「暂无待审更改」空态常驻
+    const st = get()
+    if (st.changes.length === 0 && st.ui.reviewOpen) get().setUiPref({ reviewOpen: false })
   },
   setUiPref: patch => {
     const ui = { ...get().ui, ...patch }

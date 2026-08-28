@@ -36,3 +36,10 @@ docs/**
 .vscode/**
 .git/**
 .gitignore
+
+# 本地调试/审计临时产物（QA 脚本、截图、临时 VS Code profile/workspace）
+.tmp-*
+.tmp-*/**
+.preview.log
+shot-*.png
+*.vsix

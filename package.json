@@ -2,7 +2,7 @@
   "name": "ptc-agent",
   "displayName": "PTC Agent",
   "description": "Minimal, fast coding agent (Pure-Then-Code mode)",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "ptc-agent",
   "private": true,
   "engines": {

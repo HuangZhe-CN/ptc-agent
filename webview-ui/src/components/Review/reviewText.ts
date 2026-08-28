@@ -7,9 +7,9 @@
 export type RvLocale = 'zh' | 'en'
 
 const zh = {
-  /* 汇总卡（设计稿 §10.3：`5 files changed +2565 -0 >` + 右侧 Review） */
-  'card.filesChanged': '{n} files changed',
-  'card.review': 'Review',
+  /* 汇总卡（设计稿 §10.3 原文为英文；实际界面为中文，统一译出以保持文案语言一致） */
+  'card.filesChanged': '已更改 {n} 个文件',
+  'card.review': '审阅更改',
   /* ReviewPanel 文件列表行（§13.2） */
   'panel.newFile': '新文件',
   'panel.modifiedFile': '已修改',
@@ -20,9 +20,9 @@ const zh = {
   'feedback.helpful': '有帮助',
   'feedback.notHelpful': '没帮助',
   /* ReviewActionBar（§13.2 底部 bar） */
-  'bar.filesWithChanges': '{n} Files With Changes',
-  'bar.rejectAll': 'Reject all',
-  'bar.acceptAll': 'Accept all',
+  'bar.filesWithChanges': '{n} 个文件待审',
+  'bar.rejectAll': '全部拒绝',
+  'bar.acceptAll': '全部接受',
   'bar.close': '关闭审阅',
 } as const
 

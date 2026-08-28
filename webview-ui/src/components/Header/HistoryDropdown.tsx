@@ -74,6 +74,29 @@ export function HistoryDropdown({ anchorRef, onClose }: {
     return () => document.removeEventListener('mousedown', onDown)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* 窄侧栏下 width:260 右对齐锚点会左越界视口（如默认 293px 侧栏 left=-31，
+     标题/会话名首字被裁）。纯 CSS 表达不了锚点几何，挂载与侧栏尺寸变化时 JS 夹紧：
+     左缘 ≥8px、右缘 ≤vw-8，宽度在 260 与可用空间间收缩。对齐语义（右贴锚点）不变。 */
+  useEffect(() => {
+    const el = rootRef.current
+    const anchor = anchorRef.current
+    if (!el || !anchor) return
+    const clamp = (): void => {
+      const vw = document.documentElement.clientWidth
+      if (vw <= 0) return
+      const a = anchor.getBoundingClientRect()
+      const pad = 8
+      const left = Math.max(pad, a.right - 260)          // 右对齐锚点，左缘夹进视口
+      const width = Math.min(260, vw - pad - left)       // 右缘不越视口
+      el.style.right = 'auto'
+      el.style.left = Math.round(left - a.left) + 'px'   // 转 anchor 相对坐标
+      el.style.width = Math.round(width) + 'px'
+    }
+    clamp()
+    window.addEventListener('resize', clamp)
+    return () => window.removeEventListener('resize', clamp)
+  }, [anchorRef])
+
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (e.key === 'Escape') {
       e.preventDefault()

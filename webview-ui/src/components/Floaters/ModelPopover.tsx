@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
 import { useAgentStore } from '../../store'
 import type { ActiveModel, Quality } from '@shared/protocol'
 import { ft, type FtKey } from './floatersText'
@@ -53,7 +53,11 @@ export function ModelPopover({ anchorRef, onClose, closing = false }: {
   )
 
   const [subFor, setSubFor] = useState<string | null>(null)   // rowKey of the row whose quality submenu is open
+  /** 二级菜单定位（审计 P1-1）：right=右弹（§7.2 默认）；left=右溢翻左；clamp=两侧都放不下，钉视口左缘 */
+  type SubPos = 'right' | 'left' | { clampLeft: number }
+  const [subPos, setSubPos] = useState<SubPos>('right')
   const rootRef = useRef<HTMLDivElement>(null)
+  const subRef = useRef<HTMLDivElement>(null)
   /** 主菜单可聚焦项：每行两个（行主体 + chevron），DOM 顺序扁平存储 */
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const subItemRefs = useRef<(HTMLButtonElement | null)[]>([])
@@ -95,6 +99,20 @@ export function ModelPopover({ anchorRef, onClose, closing = false }: {
       pendingSubFocus.current = false
       subItemRefs.current[0]?.focus()
     }
+  }, [subFor])
+
+  /* 二级菜单视口自适应（审计 P1-1）：绘制前测量——右弹放不下先翻左；翻左左缘 <8px
+     （默认 ≈300px 侧栏两侧均不足 120px）则钉在视口左缘内侧，覆盖 popover 左部 */
+  useLayoutEffect(() => {
+    if (!subFor) { setSubPos('right'); return }
+    const menu = subRef.current
+    const vw = document.documentElement.clientWidth
+    if (!menu || vw === 0 || !menu.parentElement) return
+    const rect = menu.getBoundingClientRect()
+    if (rect.right <= vw - 4) { setSubPos('right'); return }
+    const rowLeft = menu.parentElement.getBoundingClientRect().left
+    if (rowLeft - rect.width - 2 >= 8) setSubPos('left')
+    else setSubPos({ clampLeft: Math.max(4, Math.round(8 - rowLeft)) })
   }, [subFor])
 
   /* 点击外部关闭：popover 与 trigger 内部除外（trigger 自身的 click 负责 toggle，避免 mousedown 提前关闭又被 click 重开） */
@@ -204,12 +222,18 @@ export function ModelPopover({ anchorRef, onClose, closing = false }: {
             >
               <i className="codicon codicon-chevron-right" aria-hidden="true" />
             </button>
-            {subOpen && (
-              <div
-                className="qualityMenu popover"
-                role="menu"
-                aria-label={ft(locale, 'quality.title')}
-              >
+            {subOpen && (() => {
+              const cls = subPos === 'right' ? 'qualityMenu popover'
+                : subPos === 'left' ? 'qualityMenu popover flipLeft'
+                : 'qualityMenu popover subClamp'
+              return (
+                <div
+                  ref={subRef}
+                  className={cls}
+                  style={typeof subPos === 'object' ? { left: `${subPos.clampLeft}px` } : undefined}
+                  role="menu"
+                  aria-label={ft(locale, 'quality.title')}
+                >
                 {QUALITIES.map((q, qi) => {
                   const isCur = currentQuality === q
                   return (
@@ -230,8 +254,9 @@ export function ModelPopover({ anchorRef, onClose, closing = false }: {
                     </button>
                   )
                 })}
-              </div>
-            )}
+                </div>
+              )
+            })()}
           </div>
         )
       })}

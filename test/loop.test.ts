@@ -125,16 +125,18 @@ describe('AgentLoop', () => {
     expect(errorEvents(ops)).toEqual(['rateLimit: slow down — retrying (1/3)'])
     const completions = ops.filter(o => o.op === 'append' && o.event.type === 'completion')
       .map(o => (o as { event: { markdown: string } }).event.markdown)
-    expect(completions).toEqual(['par', 'All '])   // append 只带首个增量，后续走 patch
-    // I5：失败轮 partial completion 气泡在重试前被 remove 撤下
-    const partialId = (ops.find(o => o.op === 'append' && o.event.type === 'completion' && (o as { event: { markdown: string } }).event.markdown === 'par') as { event: { id: string } }).event.id
-    expect(ops).toContainEqual({ op: 'remove', id: partialId })
+    expect(completions).toEqual(['', ''])          // append 空正文，增量全走 patch
+    // 重试轮各自流式：失败轮 patch 到 'par'，成功轮 patch 到 'All '
     const markdowns = ops.filter(o => o.op === 'patch').map(o => (o as { patch: { markdown?: string } }).patch.markdown)
+    expect(markdowns).toContain('par')
+    expect(markdowns).toContain('All ')
+    // I5：失败轮 partial completion 气泡在重试前被 remove 撤下
+    const partialId = (ops.find(o => o.op === 'patch' && (o as { patch: { markdown?: string } }).patch.markdown === 'par') as { id: string }).id
+    expect(ops).toContainEqual({ op: 'remove', id: partialId })
     expect(markdowns).toContain('All done')
     const finalTurn = history[history.length - 1] as { role: 'assistant'; turn: AssistantTurn }
     expect(finalTurn.turn.text).toBe('All done')
   })
-
   it('rateLimit 重试耗尽（3 次，退避 1/2/4s）→ error', async () => {
     const ops: UiOp[] = []
     const delays: number[] = []
@@ -270,15 +272,50 @@ describe('AgentLoop', () => {
     }))
     expect(await loop.run('x', new AbortController().signal)).toBe('completed')
     const completionAppends = ops.filter(o => o.op === 'append' && o.event.type === 'completion') as Array<{ event: { id: string; markdown: string } }>
-    expect(completionAppends.map(c => c.event.markdown)).toEqual(['preamble ', 'All done'])
+    expect(completionAppends.map(c => c.event.markdown)).toEqual(['', ''])   // append 空正文，增量走 patch
     // preamble 气泡被撤下；最终 completion 未被撤
     expect(ops).toContainEqual({ op: 'remove', id: completionAppends[0].event.id })
     expect(ops).not.toContainEqual({ op: 'remove', id: completionAppends[1].event.id })
-    // 最终 completion 只含最终轮文本（无 preamble 拼接泄漏；单增量 → append 即全文）
-    expect(completionAppends[1].event.markdown).toBe('All done')
+    // 最终 completion 只含最终轮文本（无 preamble 拼接泄漏）
+    const finalCompletionMarkdown = ops.filter(o => o.op === 'patch' && (o as { id: string }).id === completionAppends[1].event.id)
+      .map(o => (o as { patch: { markdown: string } }).patch.markdown).at(-1)
+    expect(finalCompletionMarkdown).toBe('All done')
     // 中间轮 preamble 仍完整入历史（模型可见），只是 UI 不再呈现为最终总结
     const toolTurn = history[1] as { role: 'assistant'; turn: AssistantTurn }
     expect(toolTurn.turn.text).toBe('preamble before tool')
+  })
+
+  it('同轮 thinking+text+end_turn（纯聊天）：正文进 completion 气泡流式，不再藏进 thought.working', async () => {
+    const ops: UiOp[] = []
+    const history: HistoryMessage[] = []
+    const { adapter } = fakeAdapter([
+      [
+        { type: 'thinking_delta', text: 'plan the greeting' },
+        { type: 'text_delta', text: '你好' },
+        { type: 'text_delta', text: '！需要帮忙吗？' },
+        { type: 'message_done', stopReason: 'end_turn' },
+      ],
+    ])
+    const loop = new AgentLoop(baseDeps({
+      adapter, runtime: fakeRuntime({ logs: [] }),
+      emit: o => ops.push(...o),
+      onHistory: m => history.push(m), getHistory: () => history,
+    }))
+    expect(await loop.run('你好', new AbortController().signal)).toBe('completed')
+    // completion 事件流式承载正文（append 空正文 + patch 累积）
+    const completionAppends = ops.filter(o => o.op === 'append' && o.event.type === 'completion') as Array<{ event: { id: string; markdown: string } }>
+    expect(completionAppends).toHaveLength(1)
+    expect(completionAppends[0].event.markdown).toBe('')
+    const completionPatches = ops.filter(o => o.op === 'patch' && (o as { id: string }).id === completionAppends[0].event.id)
+      .map(o => (o as { patch: { markdown: string } }).patch.markdown)
+    expect(completionPatches).toEqual(['你好', '你好！需要帮忙吗？'])
+    // thought.working 不再吞正文：thought 的 patch 只出现在 thinking 文本与 done 固化
+    const workingPatches = ops.filter(o => o.op === 'patch' && (o as { patch: { working?: string } }).patch.working !== undefined)
+    expect(workingPatches).toHaveLength(0)
+    expect(hasPhase(ops, 'completed')).toBe(true)
+    const finalTurn = history[history.length - 1] as { role: 'assistant'; turn: AssistantTurn }
+    expect(finalTurn.turn.text).toBe('你好！需要帮忙吗？')
+    expect(finalTurn.turn.thinking).toBe('plan the greeting')
   })
 
   it('M1：程序以原始值调用工具（args 非 object）→ WeakMap key 守卫，不抛 Invalid value used as weak map key', async () => {

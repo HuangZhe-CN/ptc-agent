@@ -35,9 +35,13 @@
   from { opacity: 0; transform: translateY(-2px) scale(0.98); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
-/* 二级菜单（§7.3）：以 X 方向 2px 位移替代 Y 位移 */
+/* 二级菜单（§7.3）：以 X 方向 2px 位移替代 Y 位移；flipLeft 变体自右滑入 */
 @keyframes submenuIn {
   from { opacity: 0; transform: translateX(-2px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes submenuInLeft {
+  from { opacity: 0; transform: translateX(2px); }
   to   { opacity: 1; transform: translateX(0); }
 }
 /* 退出动画（§15 表 Popover 退出 90ms opacity；Task 26）——isClosing 由
@@ -191,6 +195,19 @@
   border-radius: 10px;
   transform-origin: left center;
   animation: submenuIn 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* 窄视口右溢翻转：ModelPopover 挂载测量后挂 flipLeft，改为靠行左侧弹出 */
+.qualityMenu.flipLeft {
+  left: auto;
+  right: calc(100% + 2px);
+  transform-origin: right center;
+  animation-name: submenuInLeft;
+}
+/* 极窄视口两侧都放不下：JS 算出相对行的 left（钉视口左缘内侧），覆盖 popover 左部 */
+.qualityMenu.subClamp {
+  right: auto;
+  transform-origin: left center;
+  animation-name: submenuIn;
 }
 .qualityRow {
   display: flex;

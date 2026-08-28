@@ -180,18 +180,16 @@ export class AgentLoop {
       case 'text_delta': {
         this.workingText += ev.text
         this.finalText += ev.text
-        if (this.thoughtId) {
-          // 工具轮间：working 行（thought 事件内）
-          d.emit([{ op: 'patch', id: this.thoughtId, patch: { working: this.workingText.slice(-2000) } as never }])
-        } else if (this.completionId) {
-          this.completionText += ev.text
-          d.emit([{ op: 'patch', id: this.completionId, patch: { markdown: this.completionText } as never }])
-        } else {
-          // 最终轮：completion 事件
+        // 正文一律走 completion 气泡流式（含同轮 thinking+text 的纯聊天轮）——
+        // 此前 thoughtId 存在时文本被塞进 thought.working，done 后 UI 隐藏该行，
+        // 导致「思考了 Ns」后正文永远不可见；中间轮 preamble 气泡仍由 I5 在
+        // tool_use 重置时 remove 撤下，语义不变。
+        if (!this.completionId) {
           this.completionId = d.newEventId()
-          this.completionText = ev.text
-          d.emit([{ op: 'append', event: { id: this.completionId, ts: Date.now(), type: 'completion', markdown: this.completionText } }])
+          d.emit([{ op: 'append', event: { id: this.completionId, ts: Date.now(), type: 'completion', markdown: '' } }])
         }
+        this.completionText += ev.text
+        d.emit([{ op: 'patch', id: this.completionId, patch: { markdown: this.completionText } as never }])
         break
       }
       case 'tool_call_delta':
