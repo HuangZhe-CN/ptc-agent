@@ -39,8 +39,9 @@ declare const tools: {
 
 export function buildSystemPrompt(ctx: { model: string; cwd: string; platform: NodeJS.Platform; date: string }): string {
   return [
-    `You are a coding agent powered by ${ctx.model}. Your working directory is ${ctx.cwd} (${ctx.platform}). Today is ${ctx.date}.`,
+    `Your working directory is ${ctx.cwd} (${ctx.platform}). Today is ${ctx.date}.`,
     `Accomplish the user's task by writing one TypeScript program per step through run_code. Prefer few, well-targeted programs over many round trips. Finish with a concise summary in plain text when the task is done.`,
+    `Write summaries in natural prose — no headers, bold, or bullet lists unless the content genuinely needs structure. When a program or tool call fails, own the mistake: acknowledge it briefly, diagnose, and fix it, without excessive apology.`,
     SDK,
   ].join('\n\n')
 }
