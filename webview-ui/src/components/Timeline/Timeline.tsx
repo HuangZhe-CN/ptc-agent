@@ -7,6 +7,7 @@ import { EditEvent } from './EditEvent'
 import { RunEvent } from './RunEvent'
 import { ErrorEvent } from './ErrorEvent'
 import { CompletionEvent } from './CompletionEvent'
+import { CompactEvent } from './CompactEvent'
 import { UserEvent } from './UserEvent'
 
 /**
@@ -30,6 +31,7 @@ export function Timeline(): JSX.Element | null {
           {e.type === 'edit' && <EditEvent event={e} />}
           {e.type === 'run' && <RunEvent event={e} />}
           {e.type === 'completion' && <CompletionEvent event={e} />}
+          {e.type === 'compact' && <CompactEvent event={e} />}
           {e.type === 'error' && <ErrorEvent event={e} />}
         </React.Fragment>
       ))}

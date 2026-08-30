@@ -20,6 +20,22 @@ describe('webview store 归约（复用 applyUiOps）', () => {
     s = applyUiOps(s, [{ op: 'remove', id: 'c' }])
     expect(s.events.map(e => e.id)).toEqual(['a'])
   })
+  it('replaceEvents：整体替换 events，不动 queue/changes/phase（/compact 归约与 host 同源）', () => {
+    let s = initialWebviewState('en')
+    s = applyUiOps(s, [
+      { op: 'append', event: { id: 'u', ts: 1, type: 'user', text: 'hi' } },
+      { op: 'append', event: { id: 'e', ts: 2, type: 'error', message: 'Stopped' } },
+      { op: 'phase', phase: 'completed' },
+      { op: 'queue', queue: [{ id: 'q1', text: 'kept' }] },
+      { op: 'changes', changes: [{ path: 'a.ts', add: 1, del: 0, kind: 'ts' }] },
+    ])
+    s = applyUiOps(s, [{ op: 'replaceEvents', events: [{ id: 'c1', ts: 3, type: 'compact', markdown: 'SUMMARY', before: 100, after: 10 }] }])
+    expect(s.events).toHaveLength(1)
+    expect(s.events[0]).toMatchObject({ id: 'c1', type: 'compact' })
+    expect(s.queue).toEqual([{ id: 'q1', text: 'kept' }])   // 队列不受整体替换影响
+    expect(s.changes).toEqual([{ path: 'a.ts', add: 1, del: 0, kind: 'ts' }])
+    expect(s.phase).toBe('completed')
+  })
 })
 
 describe('webview store applyHost（真实 zustand store，node 加载）', () => {

@@ -6,6 +6,11 @@ import './floaters.css'
 /** §15 动效表：Queue panel 退出 120ms（延迟卸载播完再卸） */
 const QUEUE_EXIT_MS = 120
 
+/** 编辑框高度上限（px，与 floaters.css .queueEditInput max-height 一致；约 5 行，超出滚动） */
+const EDIT_MAX_HEIGHT_PX = 110
+/** 单行基线高（line-height 20px + 上下 border 各 1px） */
+const EDIT_BORDER_PX = 2
+
 /**
  * Task 24：Queued Messages 浮层（设计稿 §11/§11.2/§15/§20）。
  * - 位置：Dock 内 Composer 正上方、同宽（由 Composer 外层 .composerWrap 承担流式占位，
@@ -27,6 +32,16 @@ export function QueuePanel(): JSX.Element | null {
   const [draft, setDraft] = useState('')
   const [closing, setClosing] = useState(false)
   const prevLen = useRef(queue.length)
+  const editRef = useRef<HTMLTextAreaElement | null>(null)
+
+  /* 编辑框随内容自适应高度：draft/编辑行变化时重算（box-sizing:border-box 下 scrollHeight 不含 border，补齐）；
+     单行时与原 22px 视觉一致，多行完整展开、超出上限在框内滚动 */
+  useEffect(() => {
+    const el = editRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight + EDIT_BORDER_PX, EDIT_MAX_HEIGHT_PX)}px`
+  }, [draft, editingId])
 
   /* 队列从非空 → 空：保持挂载 120ms 播退出动画，再真正卸载 */
   useEffect(() => {
@@ -91,6 +106,7 @@ export function QueuePanel(): JSX.Element | null {
                   className="queueEditInput"
                   value={draft}
                   rows={1}
+                  ref={editRef}
                   autoFocus
                   spellCheck={false}
                   aria-label={ft(locale, 'queue.edit')}

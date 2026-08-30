@@ -19,6 +19,13 @@ describe('buildGeminiBody', () => {
     expect(body.generationConfig.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: 'MEDIUM' })
     expect(body.tools[0].functionDeclarations[0].name).toBe('run_code')
   })
+  it('noTools（/compact 压缩）：省略 tools/toolConfig，其余请求形状不变', () => {
+    const body = buildGeminiBody(req({ noTools: true })) as Record<string, any>
+    expect(body.tools).toBeUndefined()
+    expect(body.toolConfig).toBeUndefined()
+    expect(body.systemInstruction).toEqual({ parts: [{ text: 'SYS' }] })
+    expect(body.generationConfig.maxOutputTokens).toBe(32768)
+  })
   it('functionResponse 放 user、functionCall+thoughtSignature 回带 model', () => {
     const body = buildGeminiBody(req({ history: [
       { role: 'assistant', turn: { thinking: 'T', text: '', toolCall: { callId: 'f1', name: 'run_code', args: { code: '1', description: 'd' } },

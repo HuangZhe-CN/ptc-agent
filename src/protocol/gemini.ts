@@ -34,8 +34,11 @@ export function buildGeminiBody(req: StreamRequest): unknown {
   const supportsThinking = req.provider.info.models.find(m => m.id === req.provider.modelId)?.supportsThinking
   return {
     systemInstruction: { parts: [{ text: req.system }] }, contents,
-    tools: [{ functionDeclarations: [{ name: 'run_code', description: RUN_CODE_DESC, parameters: RUN_CODE_SCHEMA }] }],
-    toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+    // noTools（/compact 压缩）：省略工具定义与 toolConfig，真正的无工具请求
+    ...(req.noTools ? {} : {
+      tools: [{ functionDeclarations: [{ name: 'run_code', description: RUN_CODE_DESC, parameters: RUN_CODE_SCHEMA }] }],
+      toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+    }),
     generationConfig: {
       maxOutputTokens: 32768,
       ...(supportsThinking ? { thinkingConfig: { includeThoughts: true, thinkingLevel: LEVEL[req.provider.quality] } } : {}),

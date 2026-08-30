@@ -7,6 +7,7 @@ export interface SessionMeta { sessionId: string; title: string; createdAt: numb
 export type SessionRecord =
   | { kind: 'meta'; meta: SessionMeta }
   | { kind: 'history'; message: HistoryMessage }
+  | { kind: 'historyReplace'; messages: HistoryMessage[] }   // /compact：历史整体替换为摘要（重放时清空后重填）
   | { kind: 'ops'; ops: UiOp[] }
 export interface SessionStoreDeps {
   readDir(p: string): Promise<string[]>
@@ -76,6 +77,7 @@ export class SessionStore {
     for (const r of records) {
       if (r.kind === 'ops') state = applyUiOps(state, r.ops)
       else if (r.kind === 'history') history.push(r.message)
+      else if (r.kind === 'historyReplace') history.splice(0, history.length, ...r.messages)
       else state = { ...state, title: r.meta.title }
     }
     return { state: { phase: state.phase, title: state.title, events: state.events, changes: state.changes, queue: state.queue }, history }

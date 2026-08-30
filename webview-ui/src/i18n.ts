@@ -44,6 +44,8 @@ const dicts: Record<Locale, Record<string, string>> = {
     'event.run.done': '已运行',
     'event.run.error': '运行失败',
     'event.run.noOutput': '（无输出）',
+    'event.compact.label': '已压缩会话上下文',
+    'event.compact.scale': '{before} → {after} 字符',
   },
   en: {
     'composer.placeholder': 'Ask anything…',
@@ -83,6 +85,8 @@ const dicts: Record<Locale, Record<string, string>> = {
     'event.run.done': 'Ran',
     'event.run.error': 'Run failed',
     'event.run.noOutput': '(no output)',
+    'event.compact.label': 'Compacted context',
+    'event.compact.scale': '{before} → {after} chars',
   },
 }
 

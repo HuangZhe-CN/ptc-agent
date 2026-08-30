@@ -103,6 +103,13 @@ export function Composer(): JSX.Element {
   const doSubmit = (): void => {
     const value = text.trim()
     if (!value && images.length === 0) return
+    // 斜杠命令拦截：trim 后精确等于 /compact 时交 host 执行压缩，不作为普通消息发给模型
+    //（随行图片存在时不拦截——按普通消息发送，避免静默丢弃附件）
+    if (value === '/compact' && images.length === 0) {
+      send({ type: 'slashCommand', command: 'compact' })
+      setText('')
+      return
+    }
     // 协议×mime 兜底过滤（L2）：贴入后切换模型可能造成协议与附件错配（如 Gemini 不收 GIF）
     const protocol = providers.find(p => p.id === active?.providerId)?.protocol
     const { keep, dropped } = filterImagesForProtocol(images, protocol)

@@ -24,6 +24,7 @@ export type TimelineEvent =
   | TimelineEventBase & { type: 'run'; command: string; status: 'running' | 'done' | 'error'; outputTail: string }
   | TimelineEventBase & { type: 'completion'; markdown: string }
   | TimelineEventBase & { type: 'error'; message: string }
+  | TimelineEventBase & { type: 'compact'; markdown: string; before: number; after: number }   // /compact 压缩收尾：markdown=摘要，before/after=压缩前后历史字符规模
 
 export type UiOp =
   | { op: 'append'; event: TimelineEvent }
@@ -33,6 +34,7 @@ export type UiOp =
   | { op: 'changes'; changes: FileChangeSummary[] }
   | { op: 'queue'; queue: QueuedMessage[] }
   | { op: 'title'; title: string }
+  | { op: 'replaceEvents'; events: TimelineEvent[] }   // /compact 整体替换时间线（勿复用 clear——会误清 queue 与 changes）
   | { op: 'clear' }
 
 export interface WebviewState {   // boot/快照全量
@@ -71,6 +73,7 @@ export type WebviewMessage =
   | { type: 'saveApiKey'; providerId: string; apiKey: string }
   | { type: 'deleteProvider'; providerId: string }
   | { type: 'workbenchAction'; action: 'focusExplorer' | 'focusTerminal' | 'openFolder' | 'openBrowser' | 'toggleSidebar' }
+  | { type: 'slashCommand'; command: 'compact' }
   | { type: 'rpc'; reqId: number; method: 'testProvider' | 'listModels' | 'listSessions'; params: { providerId: string; baseUrl?: string; protocol: Protocol } }
 
 export type StreamEvent =
@@ -101,6 +104,7 @@ export function applyUiOps(state: WebviewState, ops: UiOp[]): WebviewState {
       case 'changes': next.changes = op.changes; break
       case 'queue': next.queue = op.queue; break
       case 'title': next.title = op.title; break
+      case 'replaceEvents': next.events = op.events; break
       case 'clear': next.events = []; next.queue = []; next.changes = []; break
     }
   }

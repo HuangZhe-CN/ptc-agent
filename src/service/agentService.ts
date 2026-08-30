@@ -15,6 +15,22 @@ import { createTools } from '../tools/registry'
 
 const ADAPTERS: Record<Protocol, ProtocolAdapter> = { openai: openaiAdapter, anthropic: anthropicAdapter, gemini: geminiAdapter }
 
+/** /compact 的 system 指令：产出将整体替换会话历史的自足摘要。 */
+const COMPACT_SYSTEM_PROMPT = [
+  'You are a conversation compactor for a coding agent.',
+  'You receive the transcript of an ongoing session and produce the summary that will REPLACE the entire conversation history as the only context for all future turns.',
+  'Preserve in dense markdown bullets:',
+  "- the user's goals, constraints and explicit preferences;",
+  '- key decisions made and why;',
+  '- every file created or edited (with paths) and notable commands run;',
+  '- the current state of the work and what remains unfinished;',
+  '- exact next steps.',
+  'Output ONLY the summary. Do not add any commentary before or after it.',
+].join('\n')
+
+/** 压缩后新历史首条 user 消息的前缀：向模型声明该摘要即此前全部上下文。 */
+const COMPACT_PREAMBLE = '[Conversation compacted] The summary below is the context for everything that happened earlier in this session. Continue assisting the user based on it.'
+
 /** VscodeApi.fs：SessionStore 依赖面 + SnapshotTracker 的 writeFile/deleteFile。 */
 export interface VscodeFsApi extends SessionStoreDeps {
   writeFile(p: string, s: string): Promise<void>
@@ -50,12 +66,17 @@ export class AgentService {
   /** 测试钩子（公开属性）：覆盖真实 AgentLoop 装配；null 时走 defaultLoop。 */
   public loopFactory: ((userText: string, provider: ResolvedProvider, signal: AbortSignal, images?: ChatImage[]) => Promise<'completed' | 'error' | 'aborted'>) | null = null
 
+  /** 测试钩子（公开属性）：覆盖 /compact 的真实 LLM 摘要请求；null 时走 defaultCompact。 */
+  public compactFactory: ((history: HistoryMessage[], provider: ResolvedProvider, signal: AbortSignal) => Promise<string>) | null = null
+
   private sessionId: string | null = null
   private events: TimelineEvent[] = []
   private queue: QueuedMessage[] = []
   private title = 'Agent'
   private phase: SessionPhase = 'idle'
   private turnInFlight = false   // 同步占位：防止第一个 await 之前的并发 submit 重入
+  private turnPromise: Promise<void> | null = null   // 在飞活动（轮次含 drain 链，或 /compact 压缩）的 promise：queueSubmitNow 等收尾用
+  private compacting = false   // /compact 压缩在飞：queueSubmitNow 不得 abort 压缩（只中止轮次）
   private abort: AbortController | null = null
   private store: SessionStore
   private tracker: SnapshotTracker | null = null
@@ -78,6 +99,9 @@ export class AgentService {
   /** 只读测试钩子（Task 27 冒烟）：最近一次 bootSnapshot 构建的完整状态；null = 尚未 ready。 */
   getLastSnapshotForTest(): WebviewState | null { return this.lastSnapshotState }
 
+  /** 只读测试钩子：当前 LLM 上下文历史（/compact 替换与重放还原的单测断言面）。 */
+  getHistoryForTest(): HistoryMessage[] { return [...this.history] }
+
   private cwd(): string { return this.deps.api.workspaceFolders() ?? process.cwd() }
 
   /** I3：一轮提交进行中（loop 运行或提交占位）——会话切换类操作在此期间拒绝。 */
@@ -92,6 +116,7 @@ export class AgentService {
       else if (op.op === 'phase') this.phase = op.phase
       else if (op.op === 'title') this.title = op.title
       else if (op.op === 'queue') this.queue = op.queue
+      else if (op.op === 'replaceEvents') this.events = op.events
       else if (op.op === 'clear') { this.events = []; this.queue = [] }
       // 'changes' 不在本地维护：bootSnapshot 一律从 tracker.changes() 取实时值
     }
@@ -123,8 +148,8 @@ export class AgentService {
           this.emit([{ op: 'queue', queue: this.queue }])
           return
         }
-        this.turnInFlight = true
-        try { await this.runTurn(m.text, m.images) } finally { this.turnInFlight = false }
+        this.turnPromise = this.runGuarded(m.text, m.images)
+        await this.turnPromise
         return
       }
       case 'stop': this.abort?.abort('user stop'); return
@@ -133,11 +158,24 @@ export class AgentService {
       case 'queueSubmitNow': {
         const item = this.queue.find(q => q.id === m.id)
         if (!item) return
-        if (this.phase === 'running' || this.turnInFlight) return   // 运行中不可插队：保留在队列
-        this.queue = this.queue.filter(q => q.id !== m.id)
+        if (this.phase === 'running' || this.turnInFlight) {
+          // 用户拍板：运行中立即发送 = 中止当前轮，等它收尾后立刻把该条作为新轮发出。
+          // abort 后 loop 自行收尾（时间线标注 Stopped），outcome=aborted 不 drain——队列其余项原样保留。
+          // 压缩在飞时不得 abort（F1：压缩不是轮次，只等它落地再起轮）。
+          if (!this.compacting) this.abort?.abort('queue submit now')
+          const inflight = this.turnPromise
+          if (inflight) await inflight   // 严禁并发：先等在飞活动（轮次含 drain 链，或压缩）彻底落地
+        }
+        // F3：await 期间条目可能被 queueEdit/queueDelete 改动——按 id 重取 fresh 再出队起轮
+        const fresh = this.queue.find(q => q.id === m.id)
+        if (!fresh) return   // 竞态兜底：await 期间该条已被出队发送或删除——不得重复起轮
+        // F5：等同一个在飞收尾的 continuation 可能有多个（连点两条立即发送）——首个恢复起轮后，
+        // 后续到达此处时新轮已在飞，直接返回让条目留在队列（轮次完成后按序 drain 或用户再点）
+        if (this.turnInFlight || this.phase === 'running' || this.compacting) return
+        this.queue = this.queue.filter(q => q.id !== fresh.id)
         this.emit([{ op: 'queue', queue: this.queue }])
-        this.turnInFlight = true
-        try { await this.runTurn(item.text, item.images) } finally { this.turnInFlight = false }
+        this.turnPromise = this.runGuarded(fresh.text, fresh.images)
+        await this.turnPromise
         return
       }
       case 'selectModel': await this.deps.config.setActive(m.active); await this.bootSnapshot(); return
@@ -155,6 +193,7 @@ export class AgentService {
       case 'saveApiKey': await this.deps.config.saveApiKey(m.providerId, m.apiKey); await this.bootSnapshot(); return
       case 'deleteProvider': await this.deps.config.deleteProvider(m.providerId); await this.bootSnapshot(); return
       case 'workbenchAction': await this.handleWorkbenchAction(m.action); return
+      case 'slashCommand': if (m.command === 'compact') await this.compactHistory(); return
       case 'rpc': await this.handleRpc(m.reqId, m.method, m.params); return
       case 'ready': await this.bootSnapshot(); return   // 桥内部消化 ready 并经 onReady 触发；直连调用时兜底
     }
@@ -166,6 +205,108 @@ export class AgentService {
     if (rel) { if (action === 'accept') await this.tracker.drop(rel); else await this.tracker.restore(rel, cwd) }
     else for (const c of await this.tracker.changes(cwd)) { if (action === 'accept') await this.tracker.drop(c.path); else await this.tracker.restore(c.path, cwd) }
     this.emit([{ op: 'changes', changes: await this.tracker.changes(cwd).catch(() => [] as FileChangeSummary[]) }])
+  }
+
+  /** submit/queueSubmitNow 起轮统一入口：turnInFlight 占位覆盖第一个 await 前的并发窗口，并把在飞 promise 交给 this.turnPromise。 */
+  private async runGuarded(text: string, images?: ChatImage[]): Promise<void> {
+    this.turnInFlight = true
+    try { await this.runTurn(text, images) } finally { this.turnInFlight = false }
+  }
+
+  /** /compact：用当前激活 provider 发一次无工具 LLM 请求把会话历史压成摘要，整体替换 this.history 与时间线。
+   *  运行中拒绝（严禁与在飞轮并发改写 getHistory）；无会话/空历史/失败只上屏反馈，原历史不动；队列不受影响。 */
+  private async compactHistory(): Promise<void> {
+    if (this.isTurnActive()) {
+      this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'Cannot compact while a turn is running' } }])
+      return
+    }
+    if (!this.sessionId || this.history.length === 0) {
+      this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'Nothing to compact: the conversation is empty' } }])
+      return
+    }
+    this.turnPromise = this.compactGuarded()   // F1：压缩 promise 挂入在飞占位——queueSubmitNow 等它落地而非误中止
+    await this.turnPromise
+  }
+
+  /** 压缩主体（turnInFlight/compacting 占位 + abort 归属）：占位期间 submit 入队、会话切换被 I3 守卫、queueSubmitNow 等待。 */
+  private async compactGuarded(): Promise<void> {
+    this.compacting = true
+    this.turnInFlight = true
+    const prevPhase = this.phase
+    try {
+      const active = await this.deps.config.getActive()
+      const providerInfo = active ? (await this.deps.config.getProviders()).find(p => p.id === active.providerId) : undefined
+      if (!active || !providerInfo) {
+        this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'No provider/model selected' } }])
+        return
+      }
+      const provider: ResolvedProvider = { info: providerInfo, apiKey: (await this.deps.config.getApiKey(active.providerId)) ?? '', modelId: active.modelId, quality: active.quality,
+        thinkingMode: await this.deps.config.getThinkingMode(active.providerId, active.modelId) }
+      const beforeChars = JSON.stringify(this.history).length
+      this.abort = new AbortController()
+      this.emit([{ op: 'phase', phase: 'submitting' }])
+      try {
+        const summary = (this.compactFactory
+          ? await this.compactFactory(this.history, provider, this.abort.signal)
+          : await this.defaultCompact(this.history, provider, this.abort.signal)).trim()
+        if (!summary) throw new Error('model returned an empty summary')
+        this.history = [{ role: 'user', text: `${COMPACT_PREAMBLE}\n\n${summary}` }]
+        // F4：先 await 持久化 historyReplace，再 emit（emit 内 ops 为 fire-and-forget append）——
+        // 保证 JSONL 中 historyReplace 行先于 replaceEvents ops 行，重放行序确定
+        let persistError: string | null = null
+        if (this.sessionId) {
+          try { await this.store.append(this.sessionId, { kind: 'historyReplace', messages: this.history }) }
+          catch (error: unknown) { persistError = error instanceof Error ? error.message : String(error) }
+        }
+        const compactEvent: TimelineEvent = { id: `c${++this.idSeq}`, ts: Date.now(), type: 'compact', markdown: summary, before: beforeChars, after: JSON.stringify(this.history).length }
+        this.emit([
+          { op: 'replaceEvents', events: [compactEvent] },   // 时间线整体替换为压缩事件；queue/changes 不在替换范围
+          { op: 'phase', phase: prevPhase },
+        ])
+        // F7：落盘失败降级可见——内存/时间线行为不变（history 已替换、压缩事件已上屏），
+        // 但必须在 replaceEvents 之后上屏（否则会被整体替换冲掉），提示重放将不含本次压缩
+        if (persistError) {
+          this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: `compact persist failed: ${persistError} (history compacted in memory only; reopening the session will show the uncompacted history)` } }])
+        }
+      } catch (error: unknown) {
+        // 失败：原 history 原样保留（此分支不触碰 this.history），只上屏 error 并恢复 phase
+        const message = error instanceof Error ? error.message : String(error)
+        this.emit([
+          { op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: `Compact failed: ${message}` } },
+          { op: 'phase', phase: prevPhase },
+        ])
+      } finally { this.abort = null }
+    } finally {
+      this.compacting = false
+      this.turnInFlight = false
+    }
+  }
+
+  /** 真实 /compact 请求：历史序列化为单条 user 转录（任意协议结尾形状都合法），system 携压缩指令，无工具。 */
+  private async defaultCompact(history: HistoryMessage[], provider: ResolvedProvider, signal: AbortSignal): Promise<string> {
+    const transcript = history.map(m => {
+      if (m.role === 'user') return `[user] ${m.text}`
+      if (m.role === 'assistant') return `[assistant] ${m.turn.text}`
+      return `[tool result for ${m.callId}${m.isError ? ' (error)' : ''}]\n${m.content}`
+    }).join('\n\n')
+    let text = ''
+    let err: string | null = null
+    for await (const ev of ADAPTERS[provider.info.protocol].stream({
+      system: COMPACT_SYSTEM_PROMPT,
+      history: [{ role: 'user', text: `Transcript of the conversation to compact:\n\n${transcript}` }],
+      provider, signal, noTools: true,   // F2：压缩请求真正无工具（三适配器省略 tools/tool_choice/toolConfig）
+    })) {
+      if (ev.type === 'text_delta') text += ev.text
+      else if (ev.type === 'stream_error') err = `${ev.kind}: ${this.redactKey(provider, ev.message)}`
+    }
+    if (err) throw new Error(err)
+    return text
+  }
+
+  /** 错误文本脱敏（对齐 AgentLoop.redact）：apiKey 不进时间线与 JSONL。 */
+  private redactKey(provider: ResolvedProvider, text: string): string {
+    const key = provider.apiKey
+    return key ? text.split(key).join('[REDACTED]') : text
   }
 
   /** workbenchAction：action→命令白名单硬编码映射（webview 只传动作名，不可传命令串）；

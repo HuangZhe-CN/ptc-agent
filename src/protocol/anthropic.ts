@@ -40,7 +40,9 @@ export function buildAnthropicBody(req: StreamRequest): unknown {
   }
   return {
     model: req.provider.modelId, max_tokens: 32768, system: req.system,
-    messages, tools: [{ name: 'run_code', description: RUN_CODE_DESC, input_schema: RUN_CODE_SCHEMA }],
+    messages,
+    // noTools（/compact 压缩）：省略工具定义，真正的无工具请求
+    ...(req.noTools ? {} : { tools: [{ name: 'run_code', description: RUN_CODE_DESC, input_schema: RUN_CODE_SCHEMA }] }),
     ...(thinking ? { thinking } : {}), stream: true,
   }
 }

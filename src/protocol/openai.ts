@@ -35,9 +35,13 @@ export function buildOpenAiBody(req: StreamRequest): unknown {
   }
   return {
     model: req.provider.modelId, messages,
-    tools: [{ type: 'function', function: { name: 'run_code', description: RUN_CODE_DESC,
-      parameters: RUN_CODE_SCHEMA } }],
-    tool_choice: 'auto', stream: true, stream_options: { include_usage: true },
+    // noTools（/compact 压缩）：省略工具定义与 tool_choice，真正的无工具请求
+    ...(req.noTools ? {} : {
+      tools: [{ type: 'function', function: { name: 'run_code', description: RUN_CODE_DESC,
+        parameters: RUN_CODE_SCHEMA } }],
+      tool_choice: 'auto',
+    }),
+    stream: true, stream_options: { include_usage: true },
     max_completion_tokens: 32768,
     ...(req.provider.info.models.find(m => m.id === req.provider.modelId)?.supportsThinking
       ? { reasoning_effort: req.provider.quality } : {}),

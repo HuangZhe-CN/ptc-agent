@@ -410,7 +410,11 @@
   flex: 1 1 auto;
   box-sizing: border-box;
   min-width: 0;
-  height: 22px;
+  /* 高度随内容自适应（QueuePanel 的 effect 按 scrollHeight 重算）：单行与原 22px 视觉一致，
+     多行完整展开，超出 max-height 框内滚动 */
+  height: auto;
+  min-height: 22px;
+  max-height: 110px;
   padding: 0 6px;
   border: 1px solid var(--agent-input-border);
   border-radius: 4px;
@@ -421,7 +425,7 @@
   line-height: 20px;
   resize: none;
   outline: none;
-  overflow: hidden;
+  overflow-y: auto;
 }
 .queueEditInput:focus {
   outline: 1px solid var(--agent-focus);

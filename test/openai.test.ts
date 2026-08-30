@@ -24,6 +24,15 @@ describe('buildOpenAiBody', () => {
     expect(body.tools[0].function.name).toBe('run_code')
     expect(body.tools[0].function.parameters.required).toEqual(['code', 'description'])
   })
+  it('noTools（/compact 压缩）：省略 tools/tool_choice，其余请求形状不变', () => {
+    const body = buildOpenAiBody({ ...baseReq([{ role: 'user', text: 'hi' }]), noTools: true }) as Record<string, any>
+    expect(body.tools).toBeUndefined()
+    expect(body.tool_choice).toBeUndefined()
+    expect(body.stream).toBe(true)
+    expect(body.stream_options).toEqual({ include_usage: true })
+    expect(body.messages[0]).toEqual({ role: 'system', content: 'SYS' })
+    expect(body.messages[1]).toEqual({ role: 'user', content: 'hi' })
+  })
   it('assistant 轮回放 tool_calls 与 reasoning_content；tool 角色回传结果', () => {
     const body = buildOpenAiBody(baseReq([
       { role: 'assistant', turn: { thinking: 'TH', text: '', toolCall: { callId: 'c1', name: 'run_code', args: { code: '1', description: 'd' } }, replay: { reasoning_content: 'TH' } } },

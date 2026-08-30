@@ -24,6 +24,14 @@ describe('buildAnthropicBody', () => {
     expect(body.tools[0]).toMatchObject({ name: 'run_code', input_schema: expect.any(Object) })
     expect(body.messages).toEqual([])
   })
+  it('noTools（/compact 压缩）：省略 tools，其余请求形状不变', () => {
+    const body = buildAnthropicBody(req({ noTools: true })) as Record<string, any>
+    expect(body.tools).toBeUndefined()
+    expect(body.max_tokens).toBe(32768)
+    expect(body.system).toBe('SYS')
+    expect(body.stream).toBe(true)
+    expect(body.messages).toEqual([])
+  })
   it('thinkingMode=manual 时 budget 映射 quality；none 时无 thinking', () => {
     expect((buildAnthropicBody(req({ provider: { ...req().provider, thinkingMode: 'manual' } })) as any).thinking)
       .toEqual({ type: 'enabled', budget_tokens: THINKING_BUDGET.high })

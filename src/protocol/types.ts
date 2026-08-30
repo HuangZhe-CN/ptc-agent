@@ -23,7 +23,9 @@ export interface ResolvedProvider {
   thinkingMode?: 'adaptive' | 'manual' | 'none'
 }
 
-export interface StreamRequest { system: string; history: HistoryMessage[]; provider: ResolvedProvider; signal: AbortSignal }
+export interface StreamRequest { system: string; history: HistoryMessage[]; provider: ResolvedProvider; signal: AbortSignal;
+  /** 无工具请求（/compact 压缩）：三适配器据此省略 tools/tool_choice/toolConfig 字段 */
+  noTools?: boolean }
 
 export interface ProtocolAdapter {
   readonly protocol: 'openai' | 'anthropic' | 'gemini'

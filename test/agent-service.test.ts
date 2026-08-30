@@ -1,8 +1,32 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { AgentService } from '../src/service/agentService'
 import { WebviewBridge, type PostTarget } from '../src/service/webviewBridge'
 import { ConfigStore } from '../src/service/configStore'
 import type { HostMessage, UiOp } from '../src/shared/protocol'
+
+// openai 适配器注入假流：/compact 端到端用例走真实 defaultLoop/defaultCompact（其余用例 loopFactory 覆盖，不受影响）。
+// gate 挂起流以构造 running 窗口；signal 已中止时抛异常模拟 fetch abort（loop 归为 aborted 收尾）。
+const oaiMock = vi.hoisted(() => ({
+  reqs: [] as Array<{ system: string; history: Array<{ role: string; text: string }>; signal: AbortSignal }>,
+  gate: null as null | { promise: Promise<void>; resolve: () => void },
+}))
+vi.mock('../src/protocol/openai', () => ({
+  openaiAdapter: {
+    protocol: 'openai',
+    stream: async function* (req: { system: string; history: Array<{ role: string; text: string }>; signal: AbortSignal }) {
+      oaiMock.reqs.push(req)
+      if (oaiMock.gate) await oaiMock.gate.promise
+      if (req.signal.aborted) throw new Error('Request was aborted')
+      if (req.system.startsWith('You are a conversation compactor')) {
+        yield { type: 'text_delta' as const, text: '- Goal: ship the widget\n- Decided: keep dark mode' }
+      } else {
+        const last = req.history[req.history.length - 1]
+        yield { type: 'text_delta' as const, text: `reply-to:${last ? last.text : ''}` }
+      }
+      yield { type: 'message_done' as const, stopReason: 'end_turn' as const }
+    },
+  },
+}))
 
 const memorySecrets = () => {
   const m = new Map<string, string>()
@@ -276,6 +300,367 @@ describe('AgentService', () => {
     const finalState = svc.getLastSnapshotForTest()!
     expect(finalState.sessionId).not.toBe(runningSid)
     expect(finalState.events).toEqual([])
+  })
+})
+
+describe('AgentService.queueSubmitNow 运行中止立即发 & /compact', () => {
+  const openaiProvider = { id: 'p1', label: 'P', protocol: 'openai' as const, baseUrl: 'https://x', models: [{ id: 'm1', label: 'm1', supportsThinking: false }] }
+
+  /** 公共夹具：内存 JSONL 文件库 + 真实桥握手（ready → isReady），ops/事件提取 helpers。 */
+  const setup = () => {
+    const sent: HostMessage[] = []
+    const listeners: Array<(m: unknown) => void> = []
+    const disposable = { dispose: () => undefined }
+    const files = new Map<string, string>()
+    const target: PostTarget = {
+      postMessage: async (m: unknown) => { sent.push(m as HostMessage); return true },
+      onDidReceiveMessage: (l: (m: unknown) => void) => { listeners.push(l); return disposable },
+      onDidDispose: (_cb: () => void) => disposable,
+    }
+    const bridge = new WebviewBridge(target)
+    bridge.attach(target)
+    const api = {
+      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs', envLanguage: () => 'en',
+      fs: {
+        readDir: async () => [...files.keys()].map(p => p.split(/[\\/]/).pop()!),
+        readFile: async (p: string) => { const c = files.get(p); if (c === undefined) throw new Error('nf'); return c },
+        appendFile: async (p: string, s: string) => { files.set(p, (files.get(p) ?? '') + s) },
+        mkdir: async () => {}, writeFile: async () => {}, deleteFile: async () => {},
+      },
+      openDiff: async () => {},
+    }
+    const svc = new AgentService({ config: new ConfigStore(memorySecrets(), memoryMemento()), api: api as never, bridge, workerPath: 'x' })
+    bridge.onMessage(m => { void svc.handleWebviewMessage(m) })
+    listeners[0]({ type: 'ready' })   // 桥内部消化 → isReady，此后 ops 直发 sent
+    return { svc, sent, files, api }
+  }
+  const opsOf = (sent: HostMessage[]): UiOp[] => sent.filter(s => s.type === 'ops').flatMap(s => (s as { ops: UiOp[] }).ops)
+  const lastQueueOp = (sent: HostMessage[]): { queue: Array<{ id: string; text: string }> } =>
+    [...opsOf(sent)].reverse().find(o => o.op === 'queue') as unknown as { queue: Array<{ id: string; text: string }> }
+  const userTexts = (sent: HostMessage[]): string[] =>
+    opsOf(sent).filter(o => o.op === 'append' && (o as { event: { type: string } }).event.type === 'user')
+      .map(o => (o as { event: { text: string } }).event.text)
+  const lastErrorMessage = (sent: HostMessage[]): string => {
+    const errs = opsOf(sent).filter(o => o.op === 'append' && (o as { event: { type: string } }).event.type === 'error')
+    return (errs[errs.length - 1] as unknown as { event: { message: string } }).event.message
+  }
+
+  it('运行中立即发送：中止当前轮并立即发送该条，全程无并发轮次；剩余队列保留并在新轮完成后按序自动发', async () => {
+    const { svc, sent } = setup()
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [openaiProvider], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+
+    const turns: Array<{ text: string; signal: AbortSignal; resolve: (o: 'completed' | 'aborted' | 'error') => void }> = []
+    svc.loopFactory = (text, _p, signal) => new Promise(resolve => {
+      turns.push({ text, signal, resolve: resolve as (o: 'completed' | 'aborted' | 'error') => void })
+    })
+
+    const first = svc.handleWebviewMessage({ type: 'submit', text: 'first' })
+    await new Promise(r => setTimeout(r, 20))
+    await svc.handleWebviewMessage({ type: 'submit', text: 'q1' })
+    await svc.handleWebviewMessage({ type: 'submit', text: 'q2' })
+    const q1id = lastQueueOp(sent).queue[0].id   // 队列 [q1, q2] 的队首
+
+    const now = svc.handleWebviewMessage({ type: 'queueSubmitNow', id: q1id })
+    await new Promise(r => setTimeout(r, 20))
+    expect(turns[0].signal.aborted).toBe(true)      // 当前轮被中止
+    expect(turns).toHaveLength(1)                    // 收尾前不起新轮（严禁并发）
+    turns[0].resolve('aborted')
+    await new Promise(r => setTimeout(r, 20))
+    expect(turns.map(t => t.text)).toEqual(['first', 'q1'])   // 该条立即作为新轮串行发出
+    expect(userTexts(sent)).toEqual(['first', 'q1'])
+    expect(lastQueueOp(sent).queue.map(q => q.text)).toEqual(['q2'])   // 被中止轮不 drain，q2 保留
+
+    turns[1].resolve('completed')
+    await new Promise(r => setTimeout(r, 20))
+    expect(turns.map(t => t.text)).toEqual(['first', 'q1', 'q2'])   // q2 按序自动发
+    turns[2].resolve('completed')
+    await now   // now 的 turnPromise 覆盖含 q2 drain 在内的整条递归链
+    expect(lastQueueOp(sent).queue).toEqual([])
+    await first
+  })
+
+  it('/compact 端到端：无工具请求生成摘要、history 整体替换、时间线 replaceEvents+compact 事件、队列保留、重放一致、后续轮携带摘要', async () => {
+    const { svc, sent } = setup()
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [openaiProvider], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+    oaiMock.reqs.length = 0
+
+    // ① 挂起一轮（真实 defaultLoop 走 mock adapter gate）并入队一条
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    oaiMock.gate = { promise: gate, resolve: release }
+    const first = svc.handleWebviewMessage({ type: 'submit', text: 'first' })
+    await new Promise(r => setTimeout(r, 20))
+    await svc.handleWebviewMessage({ type: 'submit', text: 'keep' })
+    // ② stop 中止：mock 检测 aborted 抛异常 → loop aborted 收尾，队列保留
+    await svc.handleWebviewMessage({ type: 'stop' })
+    release()
+    await first
+    await new Promise(r => setTimeout(r, 20))
+    oaiMock.gate = null
+    expect(lastQueueOp(sent).queue.map(q => q.text)).toEqual(['keep'])
+
+    // ③ /compact：真实 defaultCompact 经 mock adapter 出摘要
+    await svc.handleWebviewMessage({ type: 'slashCommand', command: 'compact' })
+
+    // 压缩请求形状：压缩 system 指令 + 单条 user 转录（含此前 user 消息原文）
+    const creq = oaiMock.reqs[oaiMock.reqs.length - 1]
+    expect(creq.system.startsWith('You are a conversation compactor')).toBe(true)
+    expect(creq.history).toHaveLength(1)
+    expect(creq.history[0].text).toContain('[user] first')
+
+    // getHistory 被替换为摘要（单条 user，preamble + 摘要正文）
+    const hist = svc.getHistoryForTest()
+    expect(hist).toHaveLength(1)
+    expect(hist[0].role).toBe('user')
+    expect((hist[0] as { text: string }).text).toContain('Conversation compacted')
+    expect((hist[0] as { text: string }).text).toContain('Goal: ship the widget')
+
+    // 时间线整体替换为单个 compact 事件（含前后规模对比），队列不受影响
+    await svc.bootSnapshot()
+    const mem = svc.getLastSnapshotForTest()!
+    expect(mem.events).toHaveLength(1)
+    expect(mem.events[0].type).toBe('compact')
+    expect((mem.events[0] as { markdown: string }).markdown).toContain('Goal: ship the widget')
+    expect((mem.events[0] as { before: number; after: number }).before).toBeGreaterThan(0)   // 压缩前历史字符规模
+    expect((mem.events[0] as { after: number }).after).toBeGreaterThan(0)                    // 压缩后规模（玩具历史下不强行断言缩小）
+    expect(mem.queue.map(q => q.text)).toEqual(['keep'])
+
+    // JSONL 持久化：openSession 重放与内存态一致（events 与 history 双双还原为压缩后结果）
+    const sid = mem.sessionId!
+    await svc.handleWebviewMessage({ type: 'openSession', sessionId: sid })
+    const replay = svc.getLastSnapshotForTest()!
+    expect(replay.events).toEqual(mem.events)
+    expect(svc.getHistoryForTest()).toEqual(hist)
+
+    // 后续轮对话连贯：LLM 请求 history 首条即摘要（不再是旧历史）
+    await svc.handleWebviewMessage({ type: 'submit', text: 'next' })
+    // await 覆盖整条递归链：next 轮 3 条 + drain 队列 keep 轮 2 条 = 5
+    expect(svc.getHistoryForTest()).toHaveLength(5)
+    expect(svc.getHistoryForTest()[0]).toEqual(hist[0])   // 首条仍是压缩摘要
+    const nextReq = oaiMock.reqs[oaiMock.reqs.length - 1]
+    expect(nextReq.system.startsWith('You are a conversation compactor')).toBe(false)
+    expect(nextReq.history[0].text).toContain('Goal: ship the widget')
+  })
+
+  it('/compact 反馈边界：无会话/空历史可见反馈；运行中拒绝且不执行压缩；失败原 history 不动且可重试', async () => {
+    const { svc, sent } = setup()
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [openaiProvider], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+
+    // 无会话 + 空历史：可见 error 反馈，不崩溃、无 replaceEvents
+    await svc.handleWebviewMessage({ type: 'slashCommand', command: 'compact' })
+    expect(lastErrorMessage(sent)).toContain('Nothing to compact')
+    expect(opsOf(sent).some(o => o.op === 'replaceEvents')).toBe(false)
+
+    // 运行中：拒绝执行压缩（不调 compactFactory）
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    svc.loopFactory = () => gate.then((): 'completed' => 'completed')
+    const run = svc.handleWebviewMessage({ type: 'submit', text: 'running-turn' })
+    await new Promise(r => setTimeout(r, 20))
+    let compactRan = false
+    svc.compactFactory = async () => { compactRan = true; return 'NOPE' }
+    await svc.handleWebviewMessage({ type: 'slashCommand', command: 'compact' })
+    expect(compactRan).toBe(false)
+    expect(lastErrorMessage(sent)).toContain('Cannot compact')
+    release()
+    await run
+
+    // 失败路径：原 history 原样保留，只上屏 error
+    ;(svc as unknown as { history: unknown[] }).history.push({ role: 'user', text: 'h1' }, { role: 'assistant', turn: { text: 'a1' } })
+    svc.compactFactory = async () => { throw new Error('boom') }
+    await svc.handleWebviewMessage({ type: 'slashCommand', command: 'compact' })
+    expect(lastErrorMessage(sent)).toContain('Compact failed: boom')
+    expect(svc.getHistoryForTest()).toHaveLength(2)
+    expect(opsOf(sent).some(o => o.op === 'replaceEvents')).toBe(false)
+
+    // 重试成功：history 替换为摘要
+    svc.compactFactory = async () => '- retry ok'
+    await svc.handleWebviewMessage({ type: 'slashCommand', command: 'compact' })
+    const hist = svc.getHistoryForTest()
+    expect(hist).toHaveLength(1)
+    expect((hist[0] as { text: string }).text).toContain('retry ok')
+    expect(opsOf(sent).some(o => o.op === 'replaceEvents')).toBe(true)
+  })
+
+  it('F1 交叉：压缩进行中 queueSubmitNow 不中止压缩也不并发起轮，压缩落地后该条立即出队起轮', async () => {
+    const { svc, sent } = setup()
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [openaiProvider], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+
+    const turns: Array<{ text: string; signal: AbortSignal; resolve: (o: 'completed' | 'aborted' | 'error') => void }> = []
+    svc.loopFactory = (text, _p, signal) => new Promise(resolve => {
+      turns.push({ text, signal, resolve: resolve as (o: 'completed' | 'aborted' | 'error') => void })
+    })
+    // 造空闲 + 队列非空：挂起轮 stop 中止（aborted 不 drain）
+    const first = svc.handleWebviewMessage({ type: 'submit', text: 'x' })
+    await new Promise(r => setTimeout(r, 20))
+    await svc.handleWebviewMessage({ type: 'submit', text: 'pending' })
+    await svc.handleWebviewMessage({ type: 'stop' })
+    turns[0].resolve('aborted')
+    await first
+    await new Promise(r => setTimeout(r, 20))
+    const pendingId = lastQueueOp(sent).queue[0].id
+    // 历史非白板（压缩前置条件）
+    ;(svc as unknown as { history: unknown[] }).history.push({ role: 'user', text: 'h1' })
+
+    // 压缩挂起在飞
+    let compactRelease!: (v?: string) => void
+    const compactGate = new Promise<string>(r => { compactRelease = (v) => r(v ?? 'COMPACT-SUMMARY') })
+    let compactSignal!: AbortSignal
+    svc.compactFactory = (_h, _p, signal) => { compactSignal = signal; return compactGate }
+    const cp = svc.handleWebviewMessage({ type: 'slashCommand', command: 'compact' })
+    await new Promise(r => setTimeout(r, 20))
+    expect(compactSignal).toBeDefined()
+    expect(compactSignal.aborted).toBe(false)
+
+    // 压缩进行中点击立即发送：不得中止压缩、不得并发起轮
+    const now = svc.handleWebviewMessage({ type: 'queueSubmitNow', id: pendingId })
+    await new Promise(r => setTimeout(r, 20))
+    expect(compactSignal.aborted).toBe(false)   // F1：压缩未被误中止
+    expect(turns.map(t => t.text)).toEqual(['x'])   // F1：未并发起轮
+
+    // 压缩落地：queueSubmitNow 随即把该条立即作为新轮发出
+    compactRelease()
+    await cp
+    await new Promise(r => setTimeout(r, 20))
+    expect(turns.map(t => t.text)).toEqual(['x', 'pending'])
+    turns[1].resolve('completed')
+    await now
+    // 终态：history 已替换为摘要，队列清空
+    const hist = svc.getHistoryForTest()
+    expect(hist).toHaveLength(1)
+    expect((hist[0] as { text: string }).text).toContain('COMPACT-SUMMARY')
+    expect(lastQueueOp(sent).queue).toEqual([])
+  })
+
+  it('F3：queueSubmitNow 等收尾期间条目被 queueEdit——按重取的最新内容出队起轮', async () => {
+    const { svc, sent } = setup()
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [openaiProvider], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+
+    const turns: Array<{ text: string; signal: AbortSignal; resolve: (o: 'completed' | 'aborted' | 'error') => void }> = []
+    svc.loopFactory = (text, _p, signal) => new Promise(resolve => {
+      turns.push({ text, signal, resolve: resolve as (o: 'completed' | 'aborted' | 'error') => void })
+    })
+    const first = svc.handleWebviewMessage({ type: 'submit', text: 'x' })
+    await new Promise(r => setTimeout(r, 20))
+    await svc.handleWebviewMessage({ type: 'submit', text: 'q1' })
+    const qid = [...opsOf(sent)].reverse().find(o => o.op === 'queue')!.queue[0].id
+
+    const now = svc.handleWebviewMessage({ type: 'queueSubmitNow', id: qid })   // 同步 abort 后挂起等收尾
+    await svc.handleWebviewMessage({ type: 'queueEdit', id: qid, text: 'EDITED-TEXT' })   // 收尾窗口内编辑
+    turns[0].resolve('aborted')
+    await new Promise(r => setTimeout(r, 20))
+    expect(turns.map(t => t.text)).toEqual(['x', 'EDITED-TEXT'])   // F3：用 fresh 内容（非 await 前的旧快照）起轮
+    turns[1].resolve('completed')
+    await now
+  })
+
+  it('F4：compact 成功路径先落盘 historyReplace 再 emit——JSONL 行序确定', async () => {
+    const { svc, files } = setup()
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [openaiProvider], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+    svc.loopFactory = () => Promise.resolve('completed' as const)
+    await svc.handleWebviewMessage({ type: 'submit', text: 'setup' })   // 建立隐式会话
+    ;(svc as unknown as { history: unknown[] }).history.push({ role: 'user', text: 'h1' })
+
+    svc.compactFactory = async () => 'SUMMARY-OK'
+    await svc.handleWebviewMessage({ type: 'slashCommand', command: 'compact' })
+
+    const sid = (svc as unknown as { sessionId: string }).sessionId
+    const jsonl = [...files.entries()].find(([p]) => p.endsWith(`${sid}.jsonl`))![1]
+    const kinds = jsonl.split('\n').filter(l => l.trim()).map(l => {
+      const r = JSON.parse(l) as { kind: string; ops?: Array<{ op: string }> }
+      return r.kind === 'ops' ? `ops:${r.ops!.map(o => o.op).join('+')}` : r.kind
+    })
+    const hr = kinds.indexOf('historyReplace')
+    const re = kinds.findIndex(k => typeof k === 'string' && k.startsWith('ops:') && k.includes('replaceEvents'))
+    expect(hr).toBeGreaterThanOrEqual(0)
+    expect(re).toBeGreaterThan(hr)   // historyReplace 行先于 replaceEvents ops 行（重放行序确定）
+    expect(kinds[re]).toBe('ops:replaceEvents+phase')   // 同批 emit：时间线整体替换与 phase 恢复同记录
+  })
+
+  it('F5：原轮在飞连点两条立即发送——continuation 串行起轮不并发，第二条保留队列按序 drain', async () => {
+    const { svc, sent } = setup()
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [openaiProvider], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+
+    const turns: Array<{ text: string; signal: AbortSignal; resolve: (o: 'completed' | 'aborted' | 'error') => void }> = []
+    svc.loopFactory = (text, _p, signal) => new Promise(resolve => {
+      turns.push({ text, signal, resolve: resolve as (o: 'completed' | 'aborted' | 'error') => void })
+    })
+    const first = svc.handleWebviewMessage({ type: 'submit', text: 'R' })
+    await new Promise(r => setTimeout(r, 20))
+    await svc.handleWebviewMessage({ type: 'submit', text: 'A' })
+    await svc.handleWebviewMessage({ type: 'submit', text: 'B' })
+    const q = lastQueueOp(sent).queue
+    const aid = q[0].id
+    const bid = q[1].id
+
+    // 连点两条立即发送：两个 continuation 挂在同一个在飞收尾上
+    const nowA = svc.handleWebviewMessage({ type: 'queueSubmitNow', id: aid })
+    const nowB = svc.handleWebviewMessage({ type: 'queueSubmitNow', id: bid })
+    await new Promise(r => setTimeout(r, 20))
+    expect(turns[0].signal.aborted).toBe(true)
+    turns[0].resolve('aborted')
+    await new Promise(r => setTimeout(r, 20))
+    // 首个 continuation 起轮 A；第二个被 F5 在飞守卫挡回，B 保留队列（不并发）
+    expect(turns.map(t => t.text)).toEqual(['R', 'A'])
+    expect(lastQueueOp(sent).queue.map(q2 => q2.text)).toEqual(['B'])
+
+    turns[1].resolve('completed')
+    await new Promise(r => setTimeout(r, 20))
+    expect(turns.map(t => t.text)).toEqual(['R', 'A', 'B'])   // A 完成后 drain 按序自动发 B
+    turns[2].resolve('completed')
+    await nowA
+    await nowB
+    expect(lastQueueOp(sent).queue).toEqual([])
+    await first
+  })
+
+  it('F6：queueSubmitNow 等收尾期间 queueDelete 该条——收尾后不出队不起轮、无异常', async () => {
+    const { svc, sent } = setup()
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [openaiProvider], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+
+    const turns: Array<{ text: string; signal: AbortSignal; resolve: (o: 'completed' | 'aborted' | 'error') => void }> = []
+    svc.loopFactory = (text, _p, signal) => new Promise(resolve => {
+      turns.push({ text, signal, resolve: resolve as (o: 'completed' | 'aborted' | 'error') => void })
+    })
+    const first = svc.handleWebviewMessage({ type: 'submit', text: 'x' })
+    await new Promise(r => setTimeout(r, 20))
+    await svc.handleWebviewMessage({ type: 'submit', text: 'q1' })
+    const qid = lastQueueOp(sent).queue[0].id
+
+    const now = svc.handleWebviewMessage({ type: 'queueSubmitNow', id: qid })   // 同步 abort 后挂起等收尾
+    await svc.handleWebviewMessage({ type: 'queueDelete', id: qid })   // 收尾窗口内删除该条
+    turns[0].resolve('aborted')
+    await now   // fresh find 落空 → 直接返回，无异常
+    expect(turns.map(t => t.text)).toEqual(['x'])   // 不起轮
+    expect(lastQueueOp(sent).queue).toEqual([])   // 队列为空（该条已被删除）
+    await first
+  })
+
+  it('F7：historyReplace 落盘失败——replaceEvents 之后上屏可见错误，内存压缩行为不变', async () => {
+    const { svc, sent, api } = setup()
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [openaiProvider], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+    svc.loopFactory = () => Promise.resolve('completed' as const)
+    await svc.handleWebviewMessage({ type: 'submit', text: 'setup' })
+    ;(svc as unknown as { history: unknown[] }).history.push({ role: 'user', text: 'h1' })
+
+    api.fs.appendFile = async () => { throw new Error('disk full') }   // 压缩期间所有落盘失败
+    svc.compactFactory = async () => 'SUMMARY-F7'
+    await svc.handleWebviewMessage({ type: 'slashCommand', command: 'compact' })
+
+    // error 事件在 replaceEvents 之后（否则会被时间线整体替换冲掉）
+    const ops = opsOf(sent)
+    const reIdx = ops.findIndex(o => o.op === 'replaceEvents')
+    const errIdx = ops.findIndex((o, i) => i > reIdx && o.op === 'append'
+      && (o as { event: { message: string } }).event.message.includes('compact persist failed'))
+    expect(reIdx).toBeGreaterThanOrEqual(0)
+    expect(errIdx).toBeGreaterThan(reIdx)
+    expect((ops[errIdx] as { event: { message: string } }).event.message).toContain('disk full')
+    // 内存/时间线压缩行为不变：history 已替换为摘要，compact 事件已上屏
+    const hist = svc.getHistoryForTest()
+    expect(hist).toHaveLength(1)
+    expect((hist[0] as { text: string }).text).toContain('SUMMARY-F7')
+    const snapOps = ops.filter(o => o.op === 'replaceEvents')
+    expect((snapOps[0] as { events: Array<{ type: string; markdown: string }> }).events[0].markdown).toBe('SUMMARY-F7')
   })
 })
 

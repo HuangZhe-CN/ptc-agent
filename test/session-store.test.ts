@@ -59,4 +59,22 @@ describe('SessionStore', () => {
     expect(list.map(m => m.sessionId)).toEqual(['good'])
     expect(await store.load('missing')).toEqual([])
   })
+  it('historyReplace + replaceEvents 重放：history 整体替换为摘要、events 整体替换（/compact 重放闭环）', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ptc-sess-'))
+    const store = new SessionStore(root, deps)
+    // 压缩前的旧历史与旧事件
+    await store.append('s1', { kind: 'meta', meta: { sessionId: 's1', title: 'T', createdAt: 1, providerId: 'p', modelId: 'm' } })
+    await store.append('s1', { kind: 'history', message: { role: 'user', text: 'hi' } })
+    await store.append('s1', { kind: 'history', message: { role: 'assistant', turn: { text: 'hello' } } })
+    await store.append('s1', { kind: 'ops', ops: [{ op: 'append', event: { id: 'e1', ts: 1, type: 'user', text: 'hi' } }] })
+    // /compact：historyReplace 清空重填 + replaceEvents 整体替换时间线
+    await store.append('s1', { kind: 'historyReplace', messages: [{ role: 'user', text: 'SUMMARY' }] })
+    await store.append('s1', { kind: 'ops', ops: [{ op: 'replaceEvents', events: [{ id: 'c1', ts: 2, type: 'compact', markdown: 'SUMMARY', before: 100, after: 10 }] }] })
+    // 压缩后的新轮继续追加：累积在摘要之上
+    await store.append('s1', { kind: 'history', message: { role: 'user', text: 'next' } })
+    const replayed = store.replayToState(await store.load('s1'), 'en')
+    expect(replayed.history).toEqual([{ role: 'user', text: 'SUMMARY' }, { role: 'user', text: 'next' }])
+    expect(replayed.state.events).toHaveLength(1)
+    expect(replayed.state.events[0]).toMatchObject({ id: 'c1', type: 'compact' })
+  })
 })
