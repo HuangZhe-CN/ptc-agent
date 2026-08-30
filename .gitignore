@@ -23,6 +23,9 @@ dist/test/
 Thumbs.db
 .superpowers/
 
+# 历史文件归档（旧版 vsix、团队任务归档等，约定不入库）
+archive/
+
 # 本地调试/审计临时产物（QA 脚本、截图、临时 VS Code profile/workspace）
 .tmp-*
 shot-*.png
