@@ -36,13 +36,23 @@ async function* walk(dir: string, rel: string[] = []): AsyncGenerator<string> {
   }
 }
 
+/** 目录形态 glob（以 / 结尾，如 'src/'）：walk 只产出文件相对路径，若直接去尾斜杠编译成 /^src$/
+ *  将无任何文件路径可整串匹配（恒返回空结果）——展开为 'src/**'（该目录下所有文件）才是对模型友好的真实语义。
+ *  base 本身以 '**' 结尾（原 pattern 即 '**' 或 'src/**' 再带尾斜杠）时不能再叠 '/**'：/^.*\/.*$/ 会要求路径再多一层目录，
+ *  根级/浅层文件被错误排除——此时 base 已覆盖该前缀下所有文件，原样使用。
+ *  glob 与 grep 的 glob 参数共用此展开，保持两工具口径一致。 */
+const expandDirGlob = (pattern: string): string => {
+  if (!pattern.endsWith('/')) return pattern
+  const base = pattern.slice(0, -1)
+  return base.endsWith('**') ? base : `${base}/**`
+}
+
 export const globTool: ToolDef = {
   name: 'glob', concurrencySafe: true,
   async execute(args, ctx) {
     const { pattern } = args as { pattern: string; path?: string }
     const root = path.resolve(ctx.cwd, (args as { path?: string }).path ?? '.')
-    const dirOnly = pattern.endsWith('/')
-    const re = globToRegExp(dirOnly ? pattern.slice(0, -1) : pattern)
+    const re = globToRegExp(expandDirGlob(pattern))
     const matches: string[] = []
     const prefix = path.relative(ctx.cwd, root).replace(/\\/g, '/')
     for await (const rel of walk(root)) {
@@ -58,7 +68,7 @@ export const grepTool: ToolDef = {
   async execute(args, ctx) {
     const { query, glob: pattern } = args as { query: string; glob?: string; path?: string }
     const root = path.resolve(ctx.cwd, (args as { path?: string }).path ?? '.')
-    const re = pattern ? globToRegExp(pattern) : null
+    const re = pattern ? globToRegExp(expandDirGlob(pattern)) : null
     const matches: { file: string; line: number; text: string }[] = []
     const prefix = path.relative(ctx.cwd, root).replace(/\\/g, '/')
     outer: for await (const rel of walk(root)) {

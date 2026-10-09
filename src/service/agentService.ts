@@ -1,9 +1,9 @@
 import * as path from 'node:path'
 import type { Protocol, WebviewMessage, UiOp, TimelineEvent, QueuedMessage, FileChangeSummary, SessionPhase, WebviewState, ChatImage } from '../shared/protocol'
-import { initialWebviewState } from '../shared/protocol'
+import { initialWebviewState, PROTOCOL_BANNED_MIME } from '../shared/protocol'
 import { ConfigStore } from './configStore'
 import { WebviewBridge } from './webviewBridge'
-import { SessionStore, SESSION_ID_RE, type SessionStoreDeps } from '../session/store'
+import { SessionStore, SESSION_ID_RE, type SessionStoreDeps, type SessionRecord } from '../session/store'
 import { SnapshotTracker } from './snapshot'
 import { AgentLoop } from '../agent/loop'
 import { openaiAdapter } from '../protocol/openai'
@@ -30,6 +30,9 @@ const COMPACT_SYSTEM_PROMPT = [
 
 /** 压缩后新历史首条 user 消息的前缀：向模型声明该摘要即此前全部上下文。 */
 const COMPACT_PREAMBLE = '[Conversation compacted] The summary below is the context for everything that happened earlier in this session. Continue assisting the user based on it.'
+
+// PROTOCOL_BANNED_MIME（host 起轮兜底过滤用）来自 shared/protocol 单一事实来源——
+// 排队消息 drain/立即发送时协议可能已切换，仅靠 webview 提交瞬间的过滤会漏（如切到 Gemini 后 GIF 致整轮 400）
 
 /** VscodeApi.fs：SessionStore 依赖面 + SnapshotTracker 的 writeFile/deleteFile。 */
 export interface VscodeFsApi extends SessionStoreDeps {
@@ -79,6 +82,9 @@ export class AgentService {
   private compacting = false   // /compact 压缩在飞：queueSubmitNow 不得 abort 压缩（只中止轮次）
   private abort: AbortController | null = null
   private store: SessionStore
+  /** JSONL 追加串行化链：emit/onHistory 的 fire-and-forget append 同 tick 背靠背在飞时 fs 层无完成顺序保证，
+   *  行序必须等于调用序（否则重放时 patch 行先于 append 落盘会丢事件文本、时间线错乱）。 */
+  private appendChain: Promise<unknown> = Promise.resolve()
   private tracker: SnapshotTracker | null = null
   private history: HistoryMessage[] = []
   private idSeq = 0
@@ -121,8 +127,16 @@ export class AgentService {
       // 'changes' 不在本地维护：bootSnapshot 一律从 tracker.changes() 取实时值
     }
     const sid = this.sessionId ?? 'none'
-    if (this.sessionId) void this.store.append(this.sessionId, { kind: 'ops', ops }).catch(() => {})
+    if (this.sessionId) void this.persist(this.sessionId, { kind: 'ops', ops }).catch(() => {})
     this.deps.bridge.sendOps(sid, ops)
+  }
+
+  /** JSONL 追加统一入口：promise 链排队保证行序 = 调用序（sessionId 调用时同步快照，防链执行时已切会话）；
+   *  前序失败吞掉不断链，本次失败原样传给调用方（现有 .catch / await-catch 语义不变）。 */
+  private persist(sessionId: string, record: SessionRecord): Promise<void> {
+    const run = this.appendChain.then(() => this.store.append(sessionId, record))
+    this.appendChain = run.then(() => undefined, () => undefined)
+    return run
   }
 
   async bootSnapshot(): Promise<void> {
@@ -202,9 +216,26 @@ export class AgentService {
   private async acceptReject(rel: string | undefined, action: 'accept' | 'reject'): Promise<void> {
     if (!this.tracker) return
     const cwd = this.cwd()
-    if (rel) { if (action === 'accept') await this.tracker.drop(rel); else await this.tracker.restore(rel, cwd) }
-    else for (const c of await this.tracker.changes(cwd)) { if (action === 'accept') await this.tracker.drop(c.path); else await this.tracker.restore(c.path, cwd) }
-    this.emit([{ op: 'changes', changes: await this.tracker.changes(cwd).catch(() => [] as FileChangeSummary[]) }])
+    try {
+      // 批量目标 = 全量 changes（单文件即 [rel]）；changes() 自身失败（manifest/快照损坏）也要上屏可见，不得静默吞掉
+      let targets: string[]
+      try { targets = rel ? [rel] : (await this.tracker.changes(cwd)).map(c => c.path) }
+      catch (error: unknown) {
+        this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: `review ${action} failed to list changes: ${error instanceof Error ? error.message : String(error)}` } }])
+        return   // 仍走 finally 刷新面板
+      }
+      for (const p of targets) {
+        try { if (action === 'accept') await this.tracker.drop(p); else await this.tracker.restore(p, cwd) }
+        catch (error: unknown) {
+          // 单文件失败（快照损坏/globalStorage 写入故障等）：上屏可见 error 后继续处理其余文件——
+          // bridge.onMessage 是 void 调用，异常上抛只会中断整批并漏发 changes 刷新，面板停留在过期列表
+          this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: `review ${action} failed for ${p}: ${error instanceof Error ? error.message : String(error)}` } }])
+        }
+      }
+    } finally {
+      // 无条件刷新（含部分失败）：面板必须回到真实 changes 状态，用户重复点 Reject all 不会对已还原文件再走一遍
+      this.emit([{ op: 'changes', changes: await this.tracker.changes(cwd).catch(() => [] as FileChangeSummary[]) }])
+    }
   }
 
   /** submit/queueSubmitNow 起轮统一入口：turnInFlight 占位覆盖第一个 await 前的并发窗口，并把在飞 promise 交给 this.turnPromise。 */
@@ -232,6 +263,9 @@ export class AgentService {
   private async compactGuarded(): Promise<void> {
     this.compacting = true
     this.turnInFlight = true
+    // 压缩起点的队列快照（首个 await 前同步取）：落地后只 drain 压缩期间新入队的条目——
+    // 压缩前已在队列的（如 aborted 轮保留的）维持「中止不 drain」语义，不被压缩顺带发出
+    const preCompactQueueIds = new Set(this.queue.map(q => q.id))
     const prevPhase = this.phase
     try {
       const active = await this.deps.config.getActive()
@@ -255,7 +289,7 @@ export class AgentService {
         // 保证 JSONL 中 historyReplace 行先于 replaceEvents ops 行，重放行序确定
         let persistError: string | null = null
         if (this.sessionId) {
-          try { await this.store.append(this.sessionId, { kind: 'historyReplace', messages: this.history }) }
+          try { await this.persist(this.sessionId, { kind: 'historyReplace', messages: this.history }) }
           catch (error: unknown) { persistError = error instanceof Error ? error.message : String(error) }
         }
         const compactEvent: TimelineEvent = { id: `c${++this.idSeq}`, ts: Date.now(), type: 'compact', markdown: summary, before: beforeChars, after: JSON.stringify(this.history).length }
@@ -269,13 +303,23 @@ export class AgentService {
           this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: `compact persist failed: ${persistError} (history compacted in memory only; reopening the session will show the uncompacted history)` } }])
         }
       } catch (error: unknown) {
-        // 失败：原 history 原样保留（此分支不触碰 this.history），只上屏 error 并恢复 phase
+        // 失败：原 history 原样保留（此分支不触碰 this.history），只上屏 error 并恢复 phase；不 drain
         const message = error instanceof Error ? error.message : String(error)
         this.emit([
           { op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: `Compact failed: ${message}` } },
           { op: 'phase', phase: prevPhase },
         ])
+        return
       } finally { this.abort = null }
+      // 压缩落地成功：压缩期间新入队的消息自动续发（对齐 submit-during-turn 的自动出队契约——
+      // 此前它们会滞留队列直到手动「立即发送」）。turnInFlight 仍为 true 天然防并发起轮；
+      // 只取快照外（压缩开始后入队）的条目，该轮完成后的常规 drain 会接续处理队列剩余项。
+      const next = this.queue.find(q => !preCompactQueueIds.has(q.id))
+      if (next) {
+        this.queue = this.queue.filter(q => q.id !== next.id)
+        this.emit([{ op: 'queue', queue: this.queue }])
+        await this.runTurn(next.text, next.images)
+      }
     } finally {
       this.compacting = false
       this.turnInFlight = false
@@ -395,12 +439,31 @@ export class AgentService {
     await this.bootSnapshot()
   }
 
+  /** 起轮前按当前协议过滤附件（host 兜底，对齐 webview Composer 的 L2 过滤）：返回保留的图（可能为空数组）。 */
+  private filterImagesForProtocol(images: ChatImage[], protocol: Protocol): ChatImage[] {
+    const banned = PROTOCOL_BANNED_MIME[protocol]
+    if (!banned || images.length === 0) return images
+    return images.filter(i => !banned.includes(i.mime))
+  }
+
   private async runTurn(userText: string, images?: ChatImage[]): Promise<void> {
     // 回合起点上屏用户消息：先建会话再 emit——无 provider/配置异常时气泡与错误同样可见，且 JSONL 重放还原。
-    // 直发/queueSubmitNow/队列出队三条路径都经 runTurn 此处汇合；images 原样入事件（无图不带字段，逐字节兼容旧会话）。
+    // 直发/queueSubmitNow/队列出队三条路径都经 runTurn 此处汇合。provider 解析先于 user 事件：
+    // 附件须按「当前」协议过滤后再上屏（时间线与实际请求一致——排队消息 drain 时协议可能已切换）。
     if (!this.sessionId) await this.openSession(null, { reset: false })
-    this.emit([{ op: 'append', event: { id: `u${++this.idSeq}`, ts: Date.now(), type: 'user', text: userText, ...(images?.length ? { images } : {}) } }])
     const active = await this.deps.config.getActive()
+    const providerInfo = active ? (await this.deps.config.getProviders()).find(p => p.id === active.providerId) : undefined
+    // host 侧协议过滤兜底：webview 只在提交瞬间过滤一次，切到 Gemini 后 GIF 会让整轮 400 且消息已被消费出队
+    const keepImages = images && providerInfo ? this.filterImagesForProtocol(images, providerInfo.protocol) : images
+    if (!userText && (images?.length ?? 0) > 0 && !(keepImages?.length ?? 0)) {
+      // 纯图消息的附件全被当前协议滤掉：镜像 webview doSubmit 的拒绝——不起空轮，上屏可见错误
+      this.emit([
+        { op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'All image attachments were dropped: the active model protocol does not support their format (e.g. GIF on Gemini)' } },
+        { op: 'phase', phase: 'idle' },
+      ])
+      return
+    }
+    this.emit([{ op: 'append', event: { id: `u${++this.idSeq}`, ts: Date.now(), type: 'user', text: userText, ...(keepImages?.length ? { images: keepImages } : {}) } }])
     if (!active) {
       this.emit([
         { op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'No provider/model selected' } },
@@ -408,7 +471,6 @@ export class AgentService {
       ])
       return
     }
-    const providerInfo = (await this.deps.config.getProviders()).find(p => p.id === active.providerId)
     if (!providerInfo) {
       // active 指向已删除的 provider：原先静默返回会让已上屏的用户消息无任何下文——补错误反馈
       this.emit([
@@ -423,7 +485,7 @@ export class AgentService {
     const title = this.title === 'Agent' ? SessionStore.titleOf(userText) : this.title
     const meta = { sessionId: this.sessionId!, title, createdAt: Date.now(), providerId: active.providerId, modelId: active.modelId }
     try {
-      await this.store.append(this.sessionId!, { kind: 'meta', meta })
+      await this.persist(this.sessionId!, { kind: 'meta', meta })
     } catch (error: unknown) {
       // globalStorage 持久化故障：降级为可见 error 提示后继续回合（内存时间线/历史仍完整，bridge void 调用不再逃逸成 unhandledRejection）
       this.emit([{ op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: `session persist failed: ${error instanceof Error ? error.message : String(error)}` } }])
@@ -431,8 +493,8 @@ export class AgentService {
     this.emit([{ op: 'title', title }])
     this.abort = new AbortController()
     const run = this.loopFactory
-      ? this.loopFactory(userText, provider, this.abort.signal, images)
-      : this.defaultLoop(userText, provider, ADAPTERS[providerInfo.protocol], images)
+      ? this.loopFactory(userText, provider, this.abort.signal, keepImages)
+      : this.defaultLoop(userText, provider, ADAPTERS[providerInfo.protocol], keepImages)
     const outcome = await run
     this.abort = null
     if (outcome !== 'aborted') {
@@ -450,7 +512,7 @@ export class AgentService {
       emit: ops => this.emit(ops),
       onHistory: msg => {
         this.history.push(msg)
-        if (this.sessionId) void this.store.append(this.sessionId, { kind: 'history', message: msg }).catch(() => {})
+        if (this.sessionId) void this.persist(this.sessionId, { kind: 'history', message: msg }).catch(() => {})
       },
       getHistory: () => [...this.history],
       onProviderThinkingMode: mode => { void this.deps.config.setThinkingMode(provider.info.id, provider.modelId, mode) },

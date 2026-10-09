@@ -1,12 +1,13 @@
 import type { ChatImage, Protocol } from '@shared/protocol'
+import { PROTOCOL_BANNED_MIME } from '@shared/protocol'
+
+// 协议禁收 mime 表由 shared/protocol 单一事实来源提供（host 起轮兜底过滤同源）——两端各抄一份会漂移
+export { PROTOCOL_BANNED_MIME }
 
 /** 单条消息图片上限（超出拒绝并提示） */
 export const IMAGE_LIMIT = 4
 /** 降采样阈值：长边超过则等比缩到该值（Anthropic 建议 ≤1568，兼顾 token 与清晰度） */
 export const IMAGE_MAX_EDGE = 1568
-
-/** 各协议不支持的图片 mime（Gemini inlineData 仅收 png/jpeg/webp/heic/heif，不含 GIF） */
-const PROTOCOL_BANNED_MIME: Partial<Record<Protocol, readonly string[]>> = { gemini: ['image/gif'] }
 
 /** 按当前模型协议过滤附件：贴入后切换模型可能造成协议与附件错配，提交前兜底（L2） */
 export function filterImagesForProtocol(images: ChatImage[], protocol: Protocol | undefined): { keep: ChatImage[]; dropped: ChatImage[] } {

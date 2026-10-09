@@ -173,6 +173,22 @@ describe('AgentLoop', () => {
     expect(requests).toHaveLength(4)
     expect(hasPhase(ops, 'error')).toBe(true)
   })
+  it('rateLimit 重试退避采信服务端 Retry-After：与指数退避取大者，封顶 60s', async () => {
+    const delays: number[] = []
+    const err = (retryAfterMs: number): StreamEvent[] => [{ type: 'stream_error', kind: 'rateLimit', message: 'slow down', retryAfterMs }]
+    const { adapter } = fakeAdapter([
+      err(5000),      // 5s > 指数 1s → 5s
+      err(120000),    // 120s 封顶 → 60s
+      err(500),       // 500ms < 指数 4s → 4s
+      [{ type: 'text_delta', text: 'ok' }, { type: 'message_done', stopReason: 'end_turn' }],
+    ])
+    const loop = new AgentLoop(baseDeps({
+      adapter, runtime: fakeRuntime({ logs: [] }),
+      delayMs: async ms => { delays.push(ms) },
+    }))
+    expect(await loop.run('x', new AbortController().signal)).toBe('completed')
+    expect(delays).toEqual([5000, 60000, 4000])
+  })
 
   it('anthropic 400 含 thinking → 降级 manual 重试一次，onProviderThinkingMode 持久化', async () => {
     const ops: UiOp[] = []
@@ -230,6 +246,58 @@ describe('AgentLoop', () => {
     const errors = errorEvents(ops)
     expect(errors.some(m => m.includes('Stopped'))).toBe(true)
     expect(hasPhase(ops, 'completed')).toBe(true)
+  })
+
+  /** thought 收尾断言：所有 append 的 thought 事件都拿到 done 终态 patch（错误/中止/重试路径不得遗留 running 走秒） */
+  const allThoughtsFinalized = (ops: UiOp[]): void => {
+    const thoughts = ops.filter(o => o.op === 'append' && o.event.type === 'thought') as Array<{ event: { id: string } }>
+    expect(thoughts.length).toBeGreaterThan(0)
+    for (const t of thoughts) {
+      const done = ops.find(o => o.op === 'patch' && (o as { id: string }).id === t.event.id
+        && (o as { patch: { status?: string } }).patch.status === 'done')
+      expect(done, `thought ${t.event.id} 未收尾（running 残留）`).toBeDefined()
+    }
+  }
+
+  it('auth 硬错误路径收尾 thought：done patch 固化 durationMs，不再随 JSONL 永久走秒', async () => {
+    const ops: UiOp[] = []
+    const { adapter } = fakeAdapter([[{ type: 'thinking_delta', text: 'partial' }, { type: 'stream_error', kind: 'auth', message: 'bad key' }]])
+    const loop = new AgentLoop(baseDeps({ adapter, runtime: fakeRuntime({ logs: [] }), emit: o => ops.push(...o) }))
+    expect(await loop.run('x', new AbortController().signal)).toBe('error')
+    allThoughtsFinalized(ops)
+  })
+
+  it('rateLimit 重试轮的失败 thought 同样冻结：两轮思考均 done，无 running 残留', async () => {
+    const ops: UiOp[] = []
+    const { adapter } = fakeAdapter([
+      [{ type: 'thinking_delta', text: 'half' }, { type: 'stream_error', kind: 'rateLimit', message: 'slow' }],
+      [{ type: 'thinking_delta', text: 'ok' }, { type: 'message_done', stopReason: 'end_turn' }],
+    ])
+    const loop = new AgentLoop(baseDeps({
+      adapter, runtime: fakeRuntime({ logs: [] }),
+      emit: o => ops.push(...o), delayMs: async () => {},
+    }))
+    expect(await loop.run('x', new AbortController().signal)).toBe('completed')
+    const thoughts = ops.filter(o => o.op === 'append' && o.event.type === 'thought') as Array<{ event: { id: string } }>
+    expect(thoughts).toHaveLength(2)   // 失败轮 + 成功轮各一个 thought
+    allThoughtsFinalized(ops)
+  })
+
+  it('流式中途 abort：在途思考 done 冻结计时（内容保留），Stopped 标注不变', async () => {
+    const ops: UiOp[] = []
+    const controller = new AbortController()
+    const adapter: ProtocolAdapter = {
+      protocol: 'openai',
+      async *stream() {
+        yield { type: 'thinking_delta', text: 'mid-thought' }
+        controller.abort()   // 流式中途用户中止
+        throw new Error('terminated')   // 中止常伴随 fetch 断流
+      },
+    }
+    const loop = new AgentLoop(baseDeps({ adapter, runtime: fakeRuntime({ logs: [] }), emit: o => ops.push(...o) }))
+    expect(await loop.run('x', controller.signal)).toBe('aborted')
+    allThoughtsFinalized(ops)
+    expect(errorEvents(ops).some(m => m.includes('Stopped'))).toBe(true)
   })
 
   /** run 事件 patch 序列（按 append 的 run 事件 id 过滤），断言 outputTail 流式/终态 */
@@ -453,6 +521,36 @@ describe('AgentLoop', () => {
     expect(appended(ops)).toContain('explore')
   })
 
+  it('原始值 args 调用 bash：start append 与 finish patch 共用同一 id，run 事件不再孤儿 running', async () => {
+    const ops: UiOp[] = []
+    const tools = new Map<string, ToolDef>([
+      // execute 抛错模拟 worker 侧对非法 args 的 reject（bash 的 finish 分支不触碰 args 形状）
+      ['bash', { name: 'bash', concurrencySafe: false, execute: async () => { throw new Error('invalid args') } }],
+    ])
+    const runtime = {
+      run: async (opts: RunOptions): Promise<CodeRunResult> => {
+        await opts.bindings.bash('ls' as never).catch(() => {})   // 原始值 args（字符串）进不了 WeakMap
+        return { logs: [], value: true }
+      },
+    }
+    const loop = new AgentLoop(baseDeps({
+      adapter: fakeAdapter([
+        [{ type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":"return 1","description":"d"}' }, { type: 'message_done', stopReason: 'tool_use' }],
+        [{ type: 'message_done', stopReason: 'end_turn' }],
+      ]).adapter,
+      runtime, tools,
+      emit: o => ops.push(...o),
+      onHistory: () => {}, getHistory: () => [],
+    }))
+    expect(await loop.run('x', new AbortController().signal)).toBe('completed')
+    // bash start 的 run append（原始值 args → command 回退 ''）必须收到落在同 id 上的 finish patch
+    const runAppends = ops.filter(o => o.op === 'append' && o.event.type === 'run') as Array<{ event: { id: string; command: string } }>
+    const bashAppend = runAppends.find(r => r.event.command === '')
+    expect(bashAppend).toBeDefined()
+    const bashPatches = ops.filter(o => o.op === 'patch' && (o as { id: string }).id === bashAppend!.event.id) as Array<{ patch: Record<string, unknown> }>
+    expect(bashPatches.at(-1)!.patch).toMatchObject({ status: 'error' })   // execute 抛错 → finish ok:false → error 终态；旧实现 patch 落在新 id 上被静默丢弃
+  })
+
   describe('C1/C2 端到端：SSE 字节 → 适配器 → loop → turn.replay → 下一请求 body', () => {
     const enc = new TextEncoder()
     const sse = (...events: Array<[name: string, data: string]>): ReadableStream<Uint8Array> => new ReadableStream<Uint8Array>({
@@ -508,6 +606,12 @@ describe('AgentLoop', () => {
         { type: 'thinking', thinking: 'th', signature: SIG },
         { type: 'tool_use', id: 'tu1', name: 'run_code', input: { code: 'return 1', description: 'd' } },
       ] })
+      // 端到端闭环：tool_result.tool_use_id 采信流中真实 toolu id（tu1），与回放 tool_use.id 配对——
+      // 修复前此处是合成的 call_<eventId>，Anthropic 第二轮必 400
+      const toolResultMsg = body.messages[2] as { role: string; content: Array<{ type: string; tool_use_id: string; is_error: boolean }> }
+      expect(toolResultMsg.role).toBe('user')
+      expect(toolResultMsg.content[0].tool_use_id).toBe('tu1')
+      expect(toolResultMsg.content[0].is_error).toBe(false)
     })
 
     it('C2 gemini：thought/functionCall part 的 thoughtSignature 原样采集，逐字节进入下一请求 body', async () => {

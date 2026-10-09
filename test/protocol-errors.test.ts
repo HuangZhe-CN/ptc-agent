@@ -17,4 +17,8 @@ describe('classifyHttpError', () => {
     expect(classifyHttpError(400, '{"error":{"code":429,"message":"m3","status":"X"}}').message).toBe('m3')
     expect(classifyHttpError(500, 'plain').message).toContain('plain')
   })
+  it('提取路径的 message 同样 500 封顶（超长回显/畸形信封不无界外泄）', () => {
+    expect(classifyHttpError(400, `{"error":{"message":"${'x'.repeat(100000)}"}}`).message.length).toBe(500)
+    expect(classifyHttpError(400, '{"error":{"message":{"nested":true}}}').message).toBe('[object Object]')
+  })
 })

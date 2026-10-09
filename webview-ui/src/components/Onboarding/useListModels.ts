@@ -56,7 +56,12 @@ export function useListModels(): ListModelsState & {
     })
   }, [])
 
-  const reset = useCallback((): void => setState(IDLE), [])
+  // reset 同时作废在飞请求：reqIdRef 置 null 后，迟到的旧响应因 reqId 不匹配被忽略，
+  // 不会在用户改完 Base URL 后又把旧 URL 的模型列表渲染回来（与「改完重取」路径的过期判定一致）
+  const reset = useCallback((): void => {
+    reqIdRef.current = null
+    setState(IDLE)
+  }, [])
 
   return { ...state, fetch, reset }
 }

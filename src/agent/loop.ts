@@ -103,7 +103,9 @@ export class AgentLoop {
             this.retries++
             d.emit([{ op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: `${err.kind}: ${this.redact(err.message)} — retrying (${this.retries}/3)` } }])
             this.resetRoundStreaming()
-            await (d.delayMs ?? defaultDelay)(1000 * 2 ** (this.retries - 1))
+            // Retry-After 指示与指数退避取大者（服务端明确要求的退避不被忽略），封顶 60s——
+            // 异常网关的超长值不挂死整轮；适配器未上报 retryAfterMs 时退化为纯指数退避（零回归）
+            await (d.delayMs ?? defaultDelay)(Math.min(Math.max(err.retryAfterMs ?? 0, 1000 * 2 ** (this.retries - 1)), 60_000))
             continue
           }
         }
@@ -120,6 +122,7 @@ export class AgentLoop {
             continue
           }
         }
+        this.finalizeThought()   // 硬错误返回前冻结思考计时（内容保留在时间线）
         d.emit([
           { op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: this.redact(`${err.kind}: ${err.message}`) } },
           { op: 'phase', phase: 'error' },
@@ -128,6 +131,7 @@ export class AgentLoop {
       }
       if (signal.aborted) return this.abort(signal)
       if (!done) {
+        this.finalizeThought()   // 无 message_done 的残流同样不让 thought 停在 running
         d.emit([
           { op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: 'stream ended without message_done' } },
           { op: 'phase', phase: 'error' },
@@ -161,7 +165,10 @@ export class AgentLoop {
       }
       // end_turn / max_tokens / other → 完成
       if (this.finalText) {
-        d.onHistory({ role: 'assistant', turn: { ...(this.turnThinking ? { thinking: this.turnThinking } : {}), text: this.finalText } })
+        // 最终轮同样携带 replay 信封（此刻尚未清空）：anthropic blocks / gemini parts 原样回带真实
+        // signature/thoughtSignature，跨轮推理上下文不再丢失；openai 无信封 → 字段缺省，
+        // buildOpenAiBody 的 ?? turn.thinking 回退不变（旧会话无信封路径零回归）。
+        d.onHistory({ role: 'assistant', turn: { ...(this.turnThinking ? { thinking: this.turnThinking } : {}), text: this.finalText, ...(this.replayEnvelope ? { replay: this.replayEnvelope } : {}) } })
       }
       d.emit([{ op: 'phase', phase: 'completed' }])
       return 'completed'
@@ -171,6 +178,7 @@ export class AgentLoop {
   /** 重试（rateLimit/network/thinking 降级）前清空本轮流式累积，避免重放轮文本重复进入 completion/历史 */
   private resetRoundStreaming(): void {
     this.flushStreamPatches()   // 失败轮 partial 全文先落盘，clearCompletionEvent 的 remove 才有对应 append/patch 序列
+    this.finalizeThought()      // 失败轮思考冻结计时（保留已流式内容），不留 running 态走秒
     this.clearCompletionEvent()
     this.pendingTurn = undefined
     this.thoughtId = undefined
@@ -191,6 +199,16 @@ export class AgentLoop {
     this.d.emit([{ op: 'remove', id: this.completionId }])
     this.completionId = undefined
     this.completionText = ''
+  }
+
+  /** thought 终态收尾：done patch 固化 durationMs，UI 不再用墙钟差递增走秒。
+   *  message_done / 重试重置 / 硬错误返回 / abort 各路径都必须走到——否则 running 态 thought
+   *  随 ops 持久化进 JSONL，会话重放后永久显示「Thinking for N 小时」。内容保留（部分思考仍有价值）。 */
+  private finalizeThought(): void {
+    if (this.thoughtId === undefined) return
+    this.d.emit([{ op: 'patch', id: this.thoughtId, patch: { status: 'done', durationMs: Date.now() - (this.thoughtStartedAt ?? Date.now()) } as never }])
+    this.thoughtId = undefined
+    this.thoughtStartedAt = undefined
   }
 
   /** delta 到达：距该 id 上次 flush ≥间隔则立即 emit，否则入缓冲（定时器兜底到点 flush） */
@@ -255,14 +273,17 @@ export class AgentLoop {
       }
       case 'tool_call_delta':
         this.toolArgs += ev.argsDelta
-        if (!this.toolCallId) this.toolCallId = `call_${d.newEventId()}`
+        // 真实 id（适配器随增量外传的 toolu_…/call_…）优先采信：toolResult.callId 与 replay 信封中
+        // tool_use.id 天然配对，消除第二轮 tool_use_id 不匹配的 Anthropic 400；无 id 路径（缺
+        // content_block_start 的流、mock）保持合成 id 兜底零回归
+        if (!this.toolCallId) this.toolCallId = ev.id ?? `call_${d.newEventId()}`
         break
       case 'replay_envelope':
         this.replayEnvelope = ev.envelope
         break
       case 'message_done': {
         this.flushStreamPatches()   // 事件边界：终态全文 patch 先于 status done 落盘
-        if (this.thoughtId) d.emit([{ op: 'patch', id: this.thoughtId, patch: { status: 'done', durationMs: Date.now() - (this.thoughtStartedAt ?? Date.now()) } as never }])
+        this.finalizeThought()      // 正常收尾：done 固化 durationMs（与错误/中止路径共用同一收尾）
         if (ev.stopReason === 'tool_use') {
           let args: { code: string; description: string }
           try {
@@ -270,11 +291,14 @@ export class AgentLoop {
           } catch {
             args = { code: this.toolArgs, description: 'unparsed program' }
           }
+          // callId 先定后用：toolCall.callId 与兜底信封 tool_use.id 必须同源（各算各的会在无信封+无增量
+          // 的极端流上重新制造 id 不匹配）。正常路径 toolCallId 已是适配器外传的真实 toolu_…。
+          const callId = this.toolCallId || `call_${Date.now()}`
           this.pendingTurn = {
             ...(this.turnThinking ? { thinking: this.turnThinking } : {}),
             text: this.workingText,
-            toolCall: { callId: this.toolCallId || `call_${Date.now()}`, name: 'run_code', args },
-            replay: this.replayEnvelope ?? this.providerReplay(args),
+            toolCall: { callId, name: 'run_code', args },
+            replay: this.replayEnvelope ?? this.providerReplay(callId, args),
           }
           // 重置本轮流式累积（下一轮 thought 重开新事件；finalText 只保留最终轮文本；completion 气泡撤下——I5）
           this.clearCompletionEvent()
@@ -294,16 +318,17 @@ export class AgentLoop {
     }
   }
 
-  private providerReplay(args: { code: string; description: string }): unknown {
-    const callId = this.toolCallId || 'tu'
+  /** 无信封兜底信封（适配器未上报 replay_envelope 时的回放重建）。callId 由调用方传入——
+   *  与 toolCall.callId 同源，保证 anthropic 兜底 tool_use.id 与 tool_result.tool_use_id 配对。 */
+  private providerReplay(callId: string, args: { code: string; description: string }): unknown {
     if (this.d.provider.info.protocol === 'openai') {
       return this.turnThinking ? { reasoning_content: this.turnThinking } : undefined
     }
     if (this.d.provider.info.protocol === 'anthropic') {
-      return { blocks: [
-        ...(this.turnThinking ? [{ type: 'thinking', thinking: this.turnThinking, signature: '' }] : []),
-        { type: 'tool_use', id: callId, name: 'run_code', input: args },
-      ] }
+      // 不得伪造 thinking 块：Anthropic 用 signature 校验 thinking 确由模型生成，空/伪签名必 400
+      // （与 buildAnthropicBody 防御同口径——非工具轮省略历史 thinking 合法，跨轮推理上下文
+      // 由真实信封承载；走到本兜底说明信封缺失，thinking 上下文只能弃，不能伪造）。
+      return { blocks: [{ type: 'tool_use', id: callId, name: 'run_code', input: args }] }
     }
     return { parts: [
       ...(this.turnThinking ? [{ text: this.turnThinking, thought: true }] : []),
@@ -318,6 +343,10 @@ export class AgentLoop {
     const edits = new Map<string, { add: number; del: number }>()
     // DispatchPool 对同一次 submit 的 start/finish 传同一 args 引用——以此关联两相共用的 eventId
     const dispatchIds = new WeakMap<object, string>()
+    // 原始值 args（程序直接传字符串等）进不了 WeakMap：唯一在 start 即 append 的 bash 是独占工具，
+    // 其 start/finish 不会与另一个原始值调用交错——单个待配对槽即可保证 finish patch 落回 start append 的 id
+    // （并发 safe 工具的原始值调用最坏只是配对落空另起新 id，append 各自带全量数据，不产生重复/孤儿事件）
+    let pendingRawId: string | undefined
     const toolCtx: ToolContext = { cwd: d.cwd, signal }
     const pool = new DispatchPool(d.tools, toolCtx, {
       maxParallel: 10,
@@ -325,10 +354,13 @@ export class AgentLoop {
         // M1：args 可能为原始值（程序传了字符串等）——WeakMap key 仅接受对象，先 typeof 判定
         const raw = e.args ?? null
         const key = raw !== null && typeof raw === 'object' ? raw : null
-        let id = key !== null ? dispatchIds.get(key) : undefined
-        if (!id) {
-          id = d.newEventId()
-          if (key !== null) dispatchIds.set(key, id)
+        let id: string | undefined
+        if (key !== null) {
+          id = dispatchIds.get(key)
+          if (!id) { id = d.newEventId(); dispatchIds.set(key, id) }
+        } else {
+          id = pendingRawId ?? d.newEventId()
+          pendingRawId = e.phase === 'start' ? id : undefined   // finish 用毕即清，槽位不复用旧 id
         }
         if (e.phase === 'finish' && (e.name === 'write_file' || e.name === 'edit_file') && e.result != null && typeof e.result === 'object') {
           const r = e.result as { add?: number; del?: number }
@@ -344,7 +376,11 @@ export class AgentLoop {
         // 快照先于执行：编辑类 binding 内先 await beforeEdit，再进池（onEvent 为同步签名）
         bindings[name] = async a => {
           if (editLike && d.snapshotTracker) {
-            await d.snapshotTracker.beforeEdit((a as { path?: string }).path ?? '', d.cwd).catch(() => {})
+            // 快照失败（典型：../ 越出工作区被 snapPath 拒绝）不阻断编辑，但绝不静默——否则该修改
+            // 完全脱离 Review 面板（不可审阅/不可拒绝）而用户毫无感知
+            await d.snapshotTracker.beforeEdit((a as { path?: string }).path ?? '', d.cwd).catch(err => {
+              d.emit([{ op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: `snapshot unavailable: ${(a as { path?: string }).path ?? ''} (${err instanceof Error ? err.message : String(err)}) — this edit is not reviewable/rejectable` } }])
+            })
           }
           return pool.submit(name, a)
         }
@@ -383,7 +419,7 @@ export class AgentLoop {
 
   private abort(signal: AbortSignal): 'aborted' {
     this.flushStreamPatches()
-    // 保留时间线，标注 stopped；phase 回 completed
+    this.finalizeThought()   // 保留时间线，标注 stopped——思考冻结计时，内容保留但不再走秒
     this.d.emit([
       { op: 'append', event: { id: this.d.newEventId(), ts: Date.now(), type: 'error', message: `Stopped (${String(signal.reason ?? 'user')})` } },
       { op: 'phase', phase: 'completed' },

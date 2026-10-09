@@ -72,6 +72,20 @@ describe('geminiAdapter.stream', () => {
       { type: 'message_done', stopReason: 'tool_use', usage: { input: 2, output: 8 } },
     ])
   })
+  it('并行 functionCall 截断到首个：只 yield 首个调用，信封 parts 只含一个 functionCall（N 调用对 1 响应必 400）', async () => {
+    const events: any[] = []
+    const iter = geminiAdapter.stream(req(), fakeFetch(sse(
+      '{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"run_code","args":{"code":"1","description":"d"}}},{"functionCall":{"name":"run_code","args":{"code":"2","description":"e"}}}]}}]}',
+      '{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}',
+    )))
+    for await (const e of iter) events.push(e)
+    expect(events.filter(e => e.type === 'tool_call_delta')).toEqual([
+      { type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":"1","description":"d"}' },
+    ])
+    const envelope = events.find(e => e.type === 'replay_envelope')
+    expect(envelope.envelope.parts).toEqual([{ functionCall: { name: 'run_code', args: { code: '1', description: 'd' } } }])
+    expect(events.find(e => e.type === 'message_done').stopReason).toBe('tool_use')
+  })
   it('C2：thought part 与 functionCall part 各自携带的 thoughtSignature 均原样进信封（逐字节）', async () => {
     const events: any[] = []
     const TS_THOUGHT = 'c2lnLW9uLXRoaW5raW5nLXBhcnQ='

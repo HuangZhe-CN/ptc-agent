@@ -24,8 +24,9 @@ export function buildAnthropicBody(req: StreamRequest): unknown {
       const turn: AssistantTurn = m.turn
       const replayBlocks = (turn.replay as { blocks?: unknown[] } | undefined)?.blocks
       if (replayBlocks) { messages.push({ role: 'assistant', content: replayBlocks }); continue }  // thinking/tool_use 原样回传
+      // 无信封重建路径不得伪造 thinking 块：Anthropic 用 signature 校验 thinking 确由模型生成，
+      // 空/伪签名必 400；官方文档确认非工具轮省略历史 thinking 块合法（跨轮推理上下文由 replay 信封承载）
       const content: unknown[] = []
-      if (turn.thinking) content.push({ type: 'thinking', thinking: turn.thinking, signature: '' })
       if (turn.text) content.push({ type: 'text', text: turn.text })
       if (turn.toolCall) content.push({ type: 'tool_use', id: turn.toolCall.callId, name: 'run_code', input: turn.toolCall.args })
       messages.push({ role: 'assistant', content })
@@ -60,12 +61,16 @@ export const anthropicAdapter: ProtocolAdapter = {
     if (!res.ok || !res.body) {
       let text = ''
       try { text = await res.text() } catch { /* 读取失败（含 mock/连接中断）时以空文本分类 */ }
-      const { kind, message } = classifyHttpError(res.status, text, res.headers as never)
-      yield { type: 'stream_error', kind, message }; return
+      const { kind, message, retryAfterMs } = classifyHttpError(res.status, text, res.headers as never)
+      // retryAfterMs（429 的 Retry-After 秒数换算）随事件透传（三适配器同口径），重试退避由 loop 消费端采信
+      yield { type: 'stream_error', kind, message, retryAfterMs }; return
     }
     let input = 0, output = 0
     // C1：原生块累积——thinking(+signature)/redacted_thinking/text/tool_use 原样重建，供 loop 存入 turn.replay 原样回传
     const blocks: unknown[] = []
+    // 并行 tool_use 截断到首个：loop 只支持单工具调用——后续块的增量混入会拼成坏 JSON 被当程序执行，
+    // 且信封多 tool_use 对单条 tool_result 必 400（镜像 openai/gemini 的同类截断，被丢调用模型下轮可重发）
+    let sawToolUse = false
     const open = new Map<number, { type: 'thinking'; thinking: string; signature: string } | { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; json: string }>()
     const finalizeBlock = (index: number): void => {
       const s = open.get(index)
@@ -91,7 +96,11 @@ export const anthropicAdapter: ProtocolAdapter = {
           if (b.type === 'redacted_thinking') blocks[msg.index] = { ...b }   // 原样保存（含 data，无需增量）
           else if (b.type === 'thinking') open.set(msg.index, { type: 'thinking', thinking: b.thinking ?? '', signature: b.signature ?? '' })
           else if (b.type === 'text') open.set(msg.index, { type: 'text', text: b.text ?? '' })
-          else if (b.type === 'tool_use') open.set(msg.index, { type: 'tool_use', id: b.id ?? '', name: b.name ?? '', json: '' })
+          else if (b.type === 'tool_use') {
+            if (sawToolUse) break   // 并行调用的后续 tool_use 块：不开槽（增量在 delta 分支按同条件丢弃）
+            sawToolUse = true
+            open.set(msg.index, { type: 'tool_use', id: b.id ?? '', name: b.name ?? '', json: '' })
+          }
           break
         }
         case 'content_block_delta': {
@@ -100,7 +109,11 @@ export const anthropicAdapter: ProtocolAdapter = {
           if (d.type === 'thinking_delta' && d.thinking) { yield { type: 'thinking_delta', text: d.thinking }; if (s?.type === 'thinking') s.thinking += d.thinking }
           else if (d.type === 'signature_delta' && d.signature) { if (s?.type === 'thinking') s.signature += d.signature }
           else if (d.type === 'text_delta' && d.text) { yield { type: 'text_delta', text: d.text }; if (s?.type === 'text') s.text += d.text }
-          else if (d.type === 'input_json_delta' && d.partial_json) { yield { type: 'tool_call_delta', name: 'run_code', argsDelta: d.partial_json }; if (s?.type === 'tool_use') s.json += d.partial_json }
+          else if (d.type === 'input_json_delta' && d.partial_json) {
+            if (s?.type !== 'tool_use') break   // 未开槽的并行 tool_use 块增量：丢弃（不 yield、不拼接）
+            yield { type: 'tool_call_delta', name: 'run_code', argsDelta: d.partial_json, ...(s.id ? { id: s.id } : {}) }   // 真实 id（toolu_…）随增量外传：loop 采信后 tool_use_id 与 replay 信封中 tool_use.id 天然配对（缺信封/无 id 时省略字段）
+            s.json += d.partial_json
+          }
           break
         }
         case 'content_block_stop': finalizeBlock(msg.index); break

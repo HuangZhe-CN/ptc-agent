@@ -22,7 +22,7 @@ interface ToolArgsMap {
   grep: { query: string; glob?: string; path?: string };
   /** Read a text file. Returns { content, totalLines, startLine }. */
   read_file: { path: string; offset?: number; limit?: number };
-  /** Create/overwrite a file (parent dirs auto-created). Returns { path, bytes }. */
+  /** Create/overwrite a file (parent dirs auto-created). Returns { path, bytes, add, del }. */
   write_file: { path: string; content: string };
 }
 interface ToolOutputMap { [K in keyof ToolArgsMap]: JsonValue }

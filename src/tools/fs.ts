@@ -41,9 +41,13 @@ export const writeFileTool: ToolDef = {
   async execute(args, ctx) {
     const { path: p, content } = args as { path: string; content: string }
     const abs = resolve(ctx.cwd, p)
+    // 写前 best-effort 读旧内容：与 edit_file/Review 面板同口径产出 add/del（新文件旧内容按空算）
+    let orig = ''
+    try { orig = await readFile(abs, 'utf8') } catch { /* 文件不存在（新文件）等，旧内容视为空 */ }
     await mkdir(path.dirname(abs), { recursive: true })
     await writeFile(abs, content, 'utf8')
-    return { path: p.replace(/\\/g, '/'), bytes: Buffer.byteLength(content, 'utf8') }
+    const { add, del } = countLineDiff(orig, content)
+    return { path: p.replace(/\\/g, '/'), bytes: Buffer.byteLength(content, 'utf8'), add, del }
   },
 }
 
@@ -60,7 +64,9 @@ export const editFileTool: ToolDef = {
     const count = lfView.split(oldLf).length - 1
     if (count === 0) throw new Error(`edit_file: old_string not found in ${p}`)
     if (count > 1) throw new Error(`edit_file: old_string must be unique in ${p} (found ${count})`)
-    const updatedLf = lfView.replace(oldLf, new_string.replace(/\r\n/g, '\n'))
+    const newLf = new_string.replace(/\r\n/g, '\n')
+    // 替换值用函数形式：字符串形式会按 GetSubstitution 展开 $$/$&/$`/$'，Makefile($$)、bash($$)、LaTeX($$/$&) 等内容被静默损坏
+    const updatedLf = lfView.replace(oldLf, () => newLf)
     const updated = eol === '\r\n' ? updatedLf.replace(/\n/g, '\r\n') : updatedLf
     await writeFile(abs, updated, 'utf8')
     const { add, del } = countLineDiff(original, updated)

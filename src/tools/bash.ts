@@ -49,21 +49,30 @@ export const bashTool: ToolDef = {
       const stdout = new CappedBuffer()
       const stderr = new CappedBuffer()
       let timedOut = false
-      // Windows 下 shell:true 的 child 是 shell 进程，kill() 不及孙进程：taskkill /T 按进程树击杀（timeout/abort 共用）
+      // Windows 下 shell:true 的 child 是 shell 进程，kill() 不及孙进程：taskkill /T 按进程树击杀（timeout/abort 共用）。
+      // 存活守卫：子进程已退出（exitCode/signalCode 必有其一非 null）即跳过——此后 PID 可能已被无关进程
+      // 复用，无守卫的 taskkill /F 会强杀整棵无关进程树（回合级 signal 在回合结束才 abort，窗口可达分钟级）
       const killTree = (): void => {
+        if (child.exitCode !== null || child.signalCode !== null) return
         if (process.platform === 'win32' && child.pid != null) {
           spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
         } else child.kill()
       }
       const timer = setTimeout(() => { timedOut = true; killTree() }, timeout_ms)
-      child.stdout.on('data', (d: Buffer) => { stdout.push(d.toString('utf8')) })
-      child.stderr.on('data', (d: Buffer) => { stderr.push(d.toString('utf8')) })
-      child.on('error', e => { clearTimeout(timer); rejectP(new Error(`bash: ${e.message}`)) })
+      // 回合级 signal 上挂具名监听，close/error 时摘除：不摘除则本回合后续任意 abort 都会对陈旧 PID 补一发 taskkill
+      const onAbort = (): void => { timedOut = true; killTree() }
+      // 流设 utf8 编码：Node 内部经 StringDecoder 拼装跨 chunk 的多字节字符（中文/emoji 输出不再在 data 边界拆出 U+FFFD）
+      child.stdout.setEncoding('utf8')
+      child.stderr.setEncoding('utf8')
+      child.stdout.on('data', (s: string) => { stdout.push(s) })
+      child.stderr.on('data', (s: string) => { stderr.push(s) })
+      const detach = (): void => { clearTimeout(timer); ctx.signal.removeEventListener('abort', onAbort) }
+      child.on('error', e => { detach(); rejectP(new Error(`bash: ${e.message}`)) })
       child.on('close', exitCode => {
-        clearTimeout(timer)
+        detach()
         resolveP({ stdout: stdout.result(), stderr: stderr.result(), exitCode: exitCode ?? -1, timedOut })
       })
-      ctx.signal.addEventListener('abort', () => { timedOut = true; killTree() }, { once: true })
+      ctx.signal.addEventListener('abort', onAbort, { once: true })
     })
   },
 }

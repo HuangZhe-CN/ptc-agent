@@ -3,7 +3,7 @@ import { useAgentStore } from '../../store'
 import { t } from '../../i18n'
 import { ModelTrigger } from './ModelTrigger'
 import { QueuePanel } from '../Floaters/QueuePanel'
-import { fileToImage, filterImagesForProtocol, type AttachDeps } from './attachments'
+import { fileToImage, filterImagesForProtocol, IMAGE_LIMIT, type AttachDeps } from './attachments'
 import type { ChatImage } from '@shared/protocol'
 
 /** webview 真实现：createImageBitmap 取尺寸/重绘 + canvas 输出 png（透明通道保留） */
@@ -54,15 +54,19 @@ export function Composer(): JSX.Element {
   const [images, setImages] = useState<ChatImage[]>([])
   const [notice, setNotice] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  // images 的 ref 镜像：异步 decode 窗口内二次粘贴/删除也能按最新计数判限（L1 竞态修复）
+  // images 的 ref 镜像：异步 decode 窗口内二次粘贴/删除也能按最新计数判限（L1 竞态修复）。
+  // next 在调用点即刻写入 ref，而非塞进 React updater 等 render 执行（render 排期可能是宏任务）——
+  // 附件串行链（addChainRef）的后批在微任务里续跑，等不到 render 就要读最新计数
   const imagesRef = useRef<ChatImage[]>([])
   const setImagesSync = (updater: (cur: ChatImage[]) => ChatImage[]): void => {
-    setImages(cur => {
-      const next = updater(cur)
-      imagesRef.current = next
-      return next
-    })
+    const next = updater(imagesRef.current)
+    imagesRef.current = next
+    setImages(() => next)
   }
+  // 附件批次串行链（L1 补完）：onPaste/文件选择对 addFiles 是 fire-and-forget，若两批重叠，
+  // 后批会在前批的 await decode 窗口内读到同一旧计数基线、各自放行至 IMAGE_LIMIT——
+  // 入队串行后批间不重叠，批首 imagesRef 恒为最新；catch 防个别批次异常断链
+  const addChainRef = useRef<Promise<void>>(Promise.resolve())
 
   const running = phase === 'running' || phase === 'submitting'
 
@@ -73,7 +77,7 @@ export function Composer(): JSX.Element {
   }, [notice])
 
   /** 批量接图：串行保持顺序；超限/不支持给出一次性提示（不中断整批中已合格的图） */
-  const addFiles = async (files: File[]): Promise<void> => {
+  const doAddFiles = async (files: File[]): Promise<void> => {
     let count = imagesRef.current.length
     const next: ChatImage[] = []
     let limited = false
@@ -87,6 +91,11 @@ export function Composer(): JSX.Element {
     if (next.length > 0) setImagesSync(cur => [...cur, ...next])
     if (limited) setNotice(t(locale, 'composer.imageLimit'))
     else if (unsupported) setNotice(t(locale, 'composer.imageUnsupported'))
+  }
+
+  /** 附件批次入口：入队串行执行（见 addChainRef 注释），保证并发批次判限基线不重叠 */
+  const addFiles = (files: File[]): void => {
+    addChainRef.current = addChainRef.current.then(() => doAddFiles(files)).catch(() => {})
   }
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
@@ -110,9 +119,11 @@ export function Composer(): JSX.Element {
       setText('')
       return
     }
-    // 协议×mime 兜底过滤（L2）：贴入后切换模型可能造成协议与附件错配（如 Gemini 不收 GIF）
+    // 协议×mime 兜底过滤（L2）：贴入后切换模型可能造成协议与附件错配（如 Gemini 不收 GIF）；
+    // 数量双保险：串行链之外的任何未来路径泄漏的超限附件在发送前最后一刻截断
+    const bounded = images.slice(0, IMAGE_LIMIT)
     const protocol = providers.find(p => p.id === active?.providerId)?.protocol
-    const { keep, dropped } = filterImagesForProtocol(images, protocol)
+    const { keep, dropped } = filterImagesForProtocol(bounded, protocol)
     if (!value && keep.length === 0) {
       // 纯图消息但附件全被协议滤掉：不发送，保留附件让用户自行处理
       setNotice(t(locale, 'composer.imageDropped'))

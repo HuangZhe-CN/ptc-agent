@@ -69,10 +69,14 @@ export const openaiAdapter: ProtocolAdapter = {
     if (!res.ok || !res.body) {
       let text = ''
       try { text = await res.text() } catch { /* 读取失败（含 mock/连接中断）时以空文本分类 */ }
-      const { kind, message } = classifyHttpError(res.status, text, res.headers as never)
-      yield { type: 'stream_error', kind, message }; return
+      const { kind, message, retryAfterMs } = classifyHttpError(res.status, text, res.headers as never)
+      yield { type: 'stream_error', kind, message, retryAfterMs }; return   // retryAfterMs 透传，退避由 loop 消费端采信（三适配器同口径）
     }
     const toolArgs = new Map<number, { id: string; name: string; args: string }>()
+    // 并行 tool_calls 截断到首个调用：loop 只支持单工具调用（多调用增量会拼进同一 args，解析失败后
+    // 整段垃圾串被当程序执行）。记首个 tool_call 的 index，其余 index 的增量整段丢弃——历史信封
+    // （buildOpenAiBody 只回放单调用）与后续单条 toolResult 天然一致，被丢调用模型下轮可重发
+    let firstToolIndex: number | undefined
     // message_done 由 finish_reason 触发；usage 通常作为独立块随后到达（stream_options.include_usage），届时补上再发出
     let pendingStop: 'tool_use' | 'end_turn' | 'max_tokens' | 'other' | undefined
     const emitDone = function* (usage?: { input: number; output: number }): Generator<StreamEvent> {
@@ -97,12 +101,15 @@ export const openaiAdapter: ProtocolAdapter = {
       if (typeof reasoning === 'string' && reasoning) yield { type: 'thinking_delta', text: reasoning }
       if (typeof d.content === 'string' && d.content) yield { type: 'text_delta', text: d.content }
       if (Array.isArray(d.tool_calls)) for (const tc of d.tool_calls) {
+        if (firstToolIndex === undefined) firstToolIndex = tc.index
+        else if (tc.index !== firstToolIndex) continue   // 并行调用的后续 slot：丢弃（不进 slot、不 yield）
         const slot = toolArgs.get(tc.index) ?? { id: '', name: '', args: '' }
         if (tc.id) slot.id = tc.id
         if (tc.function?.name) slot.name = tc.function.name
         if (tc.function?.arguments) slot.args += tc.function.arguments
         toolArgs.set(tc.index, slot)
-        yield { type: 'tool_call_delta', name: slot.name || 'run_code', argsDelta: tc.function?.arguments ?? '' }
+        // 真实 call id 随增量外传：loop 采信后 tool_call_id 与回放 asst.tool_calls[0].id 同源配对
+        yield { type: 'tool_call_delta', name: slot.name || 'run_code', argsDelta: tc.function?.arguments ?? '', ...(slot.id ? { id: slot.id } : {}) }
       }
       if (choice.finish_reason) {
         pendingStop = STOP_MAP[choice.finish_reason] ?? 'other'

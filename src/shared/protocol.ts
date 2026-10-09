@@ -10,6 +10,9 @@ export interface ActiveModel { providerId: string; modelId: string; quality: Qua
 /** 聊天图片附件：mime 如 image/png，base64 为不带前缀的裸编码（气泡与三协议请求体各自拼装） */
 export interface ChatImage { mime: string; base64: string }
 
+/** 各协议不支持的图片 mime（Gemini inlineData 不收 GIF）——host 与 webview 共用的单一事实来源，勿在两端各抄一份 */
+export const PROTOCOL_BANNED_MIME: Partial<Record<Protocol, readonly string[]>> = { gemini: ['image/gif'] }
+
 export interface QueuedMessage { id: string; text: string; images?: ChatImage[] }
 export interface FileChangeSummary { path: string; add: number; del: number; kind: FileKind }
 /** Task 26：rpc listSessions 的结果元素（host 侧 SessionStore.list() 摘要） */
@@ -79,7 +82,7 @@ export type WebviewMessage =
 export type StreamEvent =
   | { type: 'thinking_delta'; text: string }
   | { type: 'text_delta'; text: string }
-  | { type: 'tool_call_delta'; name: string; argsDelta: string }
+  | { type: 'tool_call_delta'; name: string; argsDelta: string; id?: string }   // id：适配器外传的真实调用 id（anthropic toolu_… / openai call_…），loop 采信后与 replay 信封配对
   | { type: 'message_done'; stopReason: 'tool_use' | 'end_turn' | 'max_tokens' | 'other'; usage?: { input: number; output: number } }
   /** C1/C2：协议原生回放信封（Anthropic blocks / Gemini parts）——适配器在流中原样累积，loop 存入 turn.replay */
   | { type: 'replay_envelope'; envelope: unknown }

@@ -76,8 +76,8 @@ describe('openaiAdapter.stream', () => {
     expect(events).toEqual([
       { type: 'thinking_delta', text: 'think' },
       { type: 'text_delta', text: 'Hi' },
-      { type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":' },
-      { type: 'tool_call_delta', name: 'run_code', argsDelta: '"return 1"}' },
+      { type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":', id: 'c1' },   // 真实 call id 随增量外传（loop 采信后与回放 tool_calls[0].id 配对）
+      { type: 'tool_call_delta', name: 'run_code', argsDelta: '"return 1"}', id: 'c1' },
       { type: 'message_done', stopReason: 'tool_use', usage: { input: 5, output: 7 } },
     ])
   })
@@ -85,6 +85,21 @@ describe('openaiAdapter.stream', () => {
     const events: any[] = []
     for await (const e of openaiAdapter.stream(baseReq([]), fakeFetch(sse('data: {"choices":[{"delta":{"reasoning":"r"}}]}\n\n')))) events.push(e)
     expect(events[0]).toEqual({ type: 'thinking_delta', text: 'r' })
+  })
+  it('并行 tool_calls 截断到首个调用：后续 index 的增量整段丢弃，不拼出多调用串联的坏 JSON', async () => {
+    const events: any[] = []
+    const iter = openaiAdapter.stream(baseReq([]), fakeFetch(sse(
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"run_code","arguments":"{\\"code\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"c2","type":"function","function":{"name":"run_code","arguments":"{\\"code\\":\\"other\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"return 1\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      'data: [DONE]\n\n')))
+    for await (const e of iter) events.push(e)
+    expect(events.filter(e => e.type === 'tool_call_delta')).toEqual([
+      { type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":', id: 'c1' },
+      { type: 'tool_call_delta', name: 'run_code', argsDelta: '"return 1"}', id: 'c1' },
+    ])   // index=1 的并行调用被丢弃——loop 拼出的仍是首个调用的完整合法 JSON
+    expect(events[events.length - 1]).toMatchObject({ type: 'message_done', stopReason: 'tool_use' })
   })
   it('HTTP 401 → auth stream_error', async () => {
     const events: any[] = []

@@ -57,8 +57,8 @@ export const geminiAdapter: ProtocolAdapter = {
     if (!res.ok || !res.body) {
       let text = ''
       try { text = await res.text() } catch { /* 读取失败（含 mock/连接中断）时以空文本分类 */ }
-      const { kind, message } = classifyHttpError(res.status, text, res.headers as never)
-      yield { type: 'stream_error', kind, message }; return
+      const { kind, message, retryAfterMs } = classifyHttpError(res.status, text, res.headers as never)
+      yield { type: 'stream_error', kind, message, retryAfterMs }; return   // retryAfterMs 透传，退避由 loop 消费端采信（三适配器同口径）
     }
     let input = 0, output = 0, sawFunctionCall = false
     // C2：parts 原样累积（含 functionCall/thought part 的 thoughtSignature），供 loop 存入 turn.replay 原样回传
@@ -73,6 +73,9 @@ export const geminiAdapter: ProtocolAdapter = {
       const cand = msg.candidates?.[0]
       for (const part of cand?.content?.parts ?? []) {
         if (part.functionCall) {
+          // 并行 functionCall 截断到首个：loop 只支持单工具调用——多调用增量会拼进同一 args（垃圾串被执行），
+          // 且信封 N 个 functionCall 对后续单条 functionResponse 会触发 Gemini count 校验 400。被丢调用模型下轮可重发
+          if (sawFunctionCall) continue
           sawFunctionCall = true
           replayParts.push({ ...part })   // 含 thoughtSignature（若有）
           yield { type: 'tool_call_delta', name: part.functionCall.name, argsDelta: JSON.stringify(part.functionCall.args) }

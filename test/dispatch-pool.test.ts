@@ -45,4 +45,20 @@ describe('DispatchPool', () => {
     await p.settle()
     await expect(p.submit('read', {})).rejects.toThrow(/settled/)
   })
+  it('原始值 args 触发工具异常：promise 正常 reject（不挂起）——onEvent 在 catch 内抛错也不阻断 reject', async () => {
+    const seen: unknown[] = []
+    const t: ToolDef = { name: 'read', concurrencySafe: true, execute: async a => { seen.push(a); throw new Error('bad args') } }
+    const p = new DispatchPool(new Map([[t.name, t]]), { cwd: process.cwd(), signal: new AbortController().signal },
+      { maxParallel: 5, onEvent: e => { if (e.phase === 'finish') throw new Error('mapper exploded') } })   // 映射层抛错模拟 mapDispatchEvent 对异常 args 的 TypeError
+    await expect(p.submit('read', null)).rejects.toThrow('bad args')
+    expect(seen).toEqual([null])
+    await p.settle()
+  })
+  it('onEvent 回调抛错不阻断结算：finish 后 promise 照常 resolve', async () => {
+    const t: ToolDef = { name: 'ok', concurrencySafe: true, execute: async () => 'R' }
+    const p = new DispatchPool(new Map([[t.name, t]]), { cwd: process.cwd(), signal: new AbortController().signal },
+      { maxParallel: 5, onEvent: () => { throw new Error('mapper exploded') } })
+    await expect(p.submit('ok', {})).resolves.toBe('R')
+    await p.settle()
+  })
 })

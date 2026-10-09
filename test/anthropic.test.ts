@@ -47,6 +47,18 @@ describe('buildAnthropicBody', () => {
     expect(body.messages[0].content).toEqual(([{ type: 'thinking', thinking: 'T', signature: 'SIG' }, { type: 'tool_use', id: 'tu1', name: 'run_code', input: { code: '1', description: 'd' } }]))
     expect(body.messages[1]).toEqual({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'R', is_error: true }] })
   })
+  it('无信封重建路径不伪造 thinking 块（signature 空串必 400；非工具轮省略历史 thinking 合法）', () => {
+    const plain = buildAnthropicBody(req({ history: [
+      { role: 'assistant', turn: { thinking: 'T', text: 'hi' } },
+      { role: 'user', text: 'again' },
+    ] })) as Record<string, any>
+    expect(plain.messages[0]).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'hi' }] })
+    const tool = buildAnthropicBody(req({ history: [
+      { role: 'assistant', turn: { thinking: 'T', text: '', toolCall: { callId: 'c1', name: 'run_code', args: { code: '1', description: 'd' } } } },
+      { role: 'toolResult', callId: 'c1', content: 'R', isError: false },
+    ] })) as Record<string, any>
+    expect(tool.messages[0].content).toEqual([{ type: 'tool_use', id: 'c1', name: 'run_code', input: { code: '1', description: 'd' } }])
+  })
   it('无图 user 保持单 text 块（零回归）；带图渲染 image base64 source、纯图省略 text 块', () => {
     const img = { mime: 'image/jpeg', base64: 'AAEC' }
     const plain = buildAnthropicBody(req({ history: [{ role: 'user', text: 'hi' }] })) as Record<string, any>
@@ -84,7 +96,7 @@ describe('anthropicAdapter.stream', () => {
     expect(events).toEqual([
       { type: 'thinking_delta', text: 'th' },
       { type: 'text_delta', text: 'Hi' },
-      { type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":' },
+      { type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":', id: 'tu1' },   // 真实 toolu id 随增量外传（loop 采信后与 replay 信封中 tool_use.id 配对）
       // C1：thinking(+signature)/text/tool_use 原生块原样重建（残缺 input_json → {} 兜底）
       { type: 'replay_envelope', envelope: { blocks: [
         { type: 'thinking', thinking: 'th', signature: 'SIG' },
@@ -93,6 +105,26 @@ describe('anthropicAdapter.stream', () => {
       ] } },
       { type: 'message_done', stopReason: 'tool_use', usage: { input: 3, output: 9 } },
     ])
+  })
+  it('并行 tool_use 截断到首个：后续块的 start/delta 均忽略，信封只含一个 tool_use', async () => {
+    const events: any[] = []
+    const iter = anthropicAdapter.stream(req(), fakeFetch(sse(
+      ['content_block_start', '{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu1","name":"run_code","input":{}}}'],
+      ['content_block_delta', '{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"code\\":\\"1\\"}"}}'],
+      ['content_block_stop', '{"type":"content_block_stop","index":0}'],
+      // 并行第二个 tool_use 块：增量混入会拼成坏 JSON 被当程序执行，且信封多 tool_use 对单条 tool_result 必 400
+      ['content_block_start', '{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu2","name":"run_code","input":{}}}'],
+      ['content_block_delta', '{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"code\\":\\"2\\"}"}}'],
+      ['content_block_stop', '{"type":"content_block_stop","index":1}'],
+      ['message_delta', '{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}'],
+      ['message_stop', '{"type":"message_stop"}'],
+    )))
+    for await (const e of iter) events.push(e)
+    expect(events.filter(e => e.type === 'tool_call_delta')).toEqual([
+      { type: 'tool_call_delta', name: 'run_code', argsDelta: '{"code":"1"}', id: 'tu1' },
+    ])
+    const envelope = events.find(e => e.type === 'replay_envelope')
+    expect(envelope.envelope.blocks).toEqual([{ type: 'tool_use', id: 'tu1', name: 'run_code', input: { code: '1' } }])
   })
   it('C1：signature_delta 分片累积 + redacted_thinking 原样 + tool input 完整解析 → 信封逐字节回传', async () => {
     const events: any[] = []
@@ -125,6 +157,9 @@ describe('anthropicAdapter.stream', () => {
     ] })
     // 信封事件先于 message_done（loop 在 message_done 消费时取用）
     expect(events.findIndex(e => e.type === 'replay_envelope')).toBeLessThan(events.findIndex(e => e.type === 'message_done'))
+    // 每个 tool_call_delta 增量都携带同一真实 tool_use id（多分片流同样成立）
+    expect(events.filter(e => e.type === 'tool_call_delta')).toHaveLength(2)
+    expect(events.filter(e => e.type === 'tool_call_delta').every(e => e.id === 'tu9')).toBe(true)
   })
   it('流中 error 事件 → server stream_error', async () => {
     const events: any[] = []

@@ -23,16 +23,16 @@ export class DispatchPool {
       this.queue.push({
         name, args, started: false, reject,
         run: () => {
-          this.opts.onEvent?.({ phase: 'start', name, args })
+          this.emit({ phase: 'start', name, args })
           const exclusive = !tool.concurrencySafe
           const p = (async () => {
             try {
               const result = await tool.execute(args, this.ctx)
-              this.opts.onEvent?.({ phase: 'finish', name, args, ok: true, result })
+              this.emit({ phase: 'finish', name, args, ok: true, result })
               resolve(result)
             } catch (error: unknown) {
               const message = error instanceof Error ? error.message : String(error)
-              this.opts.onEvent?.({ phase: 'finish', name, args, ok: false, error: message })
+              this.emit({ phase: 'finish', name, args, ok: false, error: message })
               reject(error instanceof Error ? error : new Error(message))
             }
           })()
@@ -46,6 +46,13 @@ export class DispatchPool {
       })
       this.pump()
     })
+  }
+
+  /** onEvent 兜底：mapDispatchEvent 对异常 args（null/原始值漏参）仍可能抛 TypeError，
+   *  若在上方 catch 块内逃逸会跳过 reject/resolve，使工具 promise 永不结算（run_code 挂到超时）——
+   *  UI 映射失败只丢一条事件行，绝不能阻断结算路径，故整体吞掉 */
+  private emit(e: DispatchEvent): void {
+    try { this.opts.onEvent?.(e) } catch { /* 尽力而为：见上 */ }
   }
 
   private pump(): void {

@@ -662,6 +662,95 @@ describe('AgentService.queueSubmitNow 运行中止立即发 & /compact', () => {
     const snapOps = ops.filter(o => o.op === 'replaceEvents')
     expect((snapOps[0] as { events: Array<{ type: string; markdown: string }> }).events[0].markdown).toBe('SUMMARY-F7')
   })
+
+  it('压缩期间 submit 的消息入队后自动续发（对齐 submit-during-turn 契约）；压缩前已在队列的条目不被压缩顺带发出', async () => {
+    const { svc, sent } = setup()
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [openaiProvider], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+
+    const turns: Array<{ text: string; resolve: (o: 'completed' | 'aborted' | 'error') => void }> = []
+    svc.loopFactory = text => new Promise(resolve => { turns.push({ text, resolve: resolve as (o: 'completed' | 'aborted' | 'error') => void }) })
+
+    // 压缩前队列已有条目：挂起轮 stop 中止（aborted 不 drain，队列保留）
+    const first = svc.handleWebviewMessage({ type: 'submit', text: 'x' })
+    await new Promise(r => setTimeout(r, 20))
+    await svc.handleWebviewMessage({ type: 'submit', text: 'keep' })
+    await svc.handleWebviewMessage({ type: 'stop' })
+    turns[0].resolve('aborted')
+    await first
+    await new Promise(r => setTimeout(r, 20))
+    ;(svc as unknown as { history: unknown[] }).history.push({ role: 'user', text: 'h1' })   // 压缩前置：历史非空
+
+    // 压缩挂起在飞
+    let compactRelease!: () => void
+    const compactGate = new Promise<string>(r => { compactRelease = () => r('COMPACT-SUMMARY') })
+    svc.compactFactory = () => compactGate
+    const cp = svc.handleWebviewMessage({ type: 'slashCommand', command: 'compact' })
+    await new Promise(r => setTimeout(r, 20))
+
+    // 压缩期间 submit：入队（修复前会永远滞留队列，只能手动「立即发送」）
+    await svc.handleWebviewMessage({ type: 'submit', text: 'during-compact' })
+    expect(lastQueueOp(sent).queue.map(q => q.text)).toEqual(['keep', 'during-compact'])
+    expect(turns.map(t => t.text)).toEqual(['x'])   // 压缩在飞不并发起轮
+
+    // 压缩落地：during-compact 自动作为新轮发出；keep（压缩前入队）保留
+    compactRelease()
+    await new Promise(r => setTimeout(r, 20))
+    expect(turns.map(t => t.text)).toEqual(['x', 'during-compact'])
+    expect(lastQueueOp(sent).queue.map(q => q.text)).toEqual(['keep'])
+    expect(svc.getHistoryForTest()).toHaveLength(1)   // 压缩成功：历史已替换为摘要
+
+    // during-compact 轮完成后按常规 drain 契约接续发出 keep
+    turns[1].resolve('completed')
+    await new Promise(r => setTimeout(r, 20))
+    expect(turns.map(t => t.text)).toEqual(['x', 'during-compact', 'keep'])
+    turns[2].resolve('completed')
+    await cp
+    expect(lastQueueOp(sent).queue).toEqual([])
+  })
+
+  it('JSONL 追加串行化：同窗口背靠背 emit 的落盘行序等于调用序（慢先快后不颠倒）', async () => {
+    const { svc, files, api } = setup()
+    // 不配置 provider：runTurn 内 emit(user) 后紧跟 emit(error)——两次 fire-and-forget append 同窗口在飞
+    api.fs.appendFile = async (p: string, s: string) => {
+      if (s.includes('SLOW-USER')) await new Promise(r => setTimeout(r, 25))   // 人为让首个 append 慢于后续
+      files.set(p, (files.get(p) ?? '') + s)
+    }
+    await svc.handleWebviewMessage({ type: 'submit', text: 'SLOW-USER' })
+    await new Promise(r => setTimeout(r, 100))   // 等 fire-and-forget 链收尾
+    const sid = (svc as unknown as { sessionId: string }).sessionId
+    const jsonl = [...files.entries()].find(([p]) => p.endsWith(`${sid}.jsonl`))![1]
+    const opsLines = jsonl.split('\n').filter(l => l.includes('"kind":"ops"'))
+    expect(opsLines[0]).toContain('SLOW-USER')                    // user 行先落盘 = 调用序
+    expect(opsLines[1]).toContain('No provider/model selected')   // error 行在后（无串行化时慢行被快行反超，重放时间线错乱）
+  })
+
+  it('排队消息起轮时按当前协议重滤附件：运行中切到 Gemini 后 drain 的 GIF 不进请求与时间线；纯图全滤上屏错误不起空轮', async () => {
+    const { svc, sent } = setup()
+    const geminiProvider = { id: 'g1', label: 'G', protocol: 'gemini' as const, baseUrl: 'https://g', models: [{ id: 'm1', label: 'm1', supportsThinking: false }] }
+    await svc.handleWebviewMessage({ type: 'saveProviders', providers: [openaiProvider, geminiProvider], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
+
+    const loopArgs: Array<{ text: string; images?: unknown[] }> = []
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    svc.loopFactory = (text, _p, _s, images) => { loopArgs.push({ text, images }); return gate.then(() => 'completed') }
+
+    const gif = { mime: 'image/gif', base64: 'R0lG' }
+    const first = svc.handleWebviewMessage({ type: 'submit', text: 'first' })
+    await new Promise(r => setTimeout(r, 20))
+    await svc.handleWebviewMessage({ type: 'submit', text: 'gif-msg', images: [gif] })   // openai 下合法 → 入队
+    await svc.handleWebviewMessage({ type: 'selectModel', active: { providerId: 'g1', modelId: 'm1', quality: 'low' } })   // 运行中切到 Gemini
+    release()
+    await first   // 覆盖整条 drain 链
+    expect(loopArgs.map(a => a.text)).toEqual(['first', 'gif-msg'])
+    expect(loopArgs[1].images).toStrictEqual([])   // GIF 被当前协议滤掉：请求不带图（修复前原样转发 → Gemini 400 整轮失败）
+    const userEvents = opsOf(sent).filter(o => o.op === 'append' && (o as { event: { type: string } }).event.type === 'user')
+    expect((userEvents[1] as { event: { images?: unknown[] } }).event.images).toBeUndefined()   // 时间线 user 事件与实际请求一致
+
+    // 纯图消息全被当前协议滤掉：不起空轮，上屏可见错误（镜像 webview doSubmit 的拒绝行为）
+    await svc.handleWebviewMessage({ type: 'submit', text: '', images: [gif] })
+    expect(loopArgs).toHaveLength(2)   // 未起轮
+    expect(lastErrorMessage(sent)).toContain('dropped')
+  })
 })
 
 describe('AgentService.workbenchAction', () => {

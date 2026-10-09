@@ -31,6 +31,24 @@ describe('SnapshotTracker', () => {
     await rm(root, { recursive: true, force: true })
   })
 
+  it('Accept 后再次编辑以已接受内容为新基线重新跟踪；restore 回滚到已接受内容（非最初快照）', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ptc-snap-'))
+    const cwd = path.join(root, 'ws'); await mkdir(cwd, { recursive: true })
+    const f = 'a.js'
+    await writeFile(path.join(cwd, f), 'v0\n')
+    const t = new SnapshotTracker(path.join(root, 'snaps'), fs)
+    await t.beforeEdit(f, cwd)                        // 快照 v0
+    await writeFile(path.join(cwd, f), 'v1\n')
+    await t.drop(f)                                   // Accept：快照置空串标记
+    expect(await t.changes(cwd)).toEqual([])          // 已接受不呈现
+    await t.beforeEdit(f, cwd)                        // 先快照再落盘（对齐 loop.ts 生产序）：此刻仍 v1，空串标记 → 重定基线（修复前当已有快照跳过 → 永久脱管）
+    await writeFile(path.join(cwd, f), 'v1\nedit\n')  // turn2 再改同一文件
+    expect(await t.changes(cwd)).toEqual([{ path: 'a.js', add: 1, del: 0, kind: 'js' }])
+    await t.restore(f, cwd)                           // Reject：回到已接受内容 v1（而非最初 v0）
+    expect(await readFile(path.join(cwd, f), 'utf8')).toBe('v1\n')
+    await rm(root, { recursive: true, force: true })
+  })
+
   it('I1：新文件 beforeEdit ENOENT → 哨兵登记 → changes 纯 add（isNewFile 驱动）；readSnapshot 呈现空原文', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'ptc-snap-'))
     const cwd = path.join(root, 'ws'); await mkdir(cwd, { recursive: true })
@@ -67,6 +85,34 @@ describe('SnapshotTracker', () => {
     expect(await readFile(wsFile, 'utf8')).toBe('')
     expect(await t2.changes(cwd)).toEqual([])
     expect(NEW_FILE_SNAPSHOT).toBe('\0new')
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('restore 重建被删的父目录：Reject 不再中途 ENOENT，快照写回成功', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ptc-snap-'))
+    const cwd = path.join(root, 'ws'); await mkdir(cwd, { recursive: true })
+    const f = 'sub/b.ts'
+    await mkdir(path.join(cwd, 'sub'), { recursive: true })
+    await writeFile(path.join(cwd, f), 'orig\n')
+    const t = new SnapshotTracker(path.join(root, 'snaps'), fs)
+    await t.beforeEdit(f, cwd)
+    await writeFile(path.join(cwd, f), 'changed\n')
+    await rm(path.join(cwd, 'sub'), { recursive: true, force: true })   // 编辑后目录整个被删（快照仍在）
+    expect((await t.changes(cwd)).length).toBe(1)                       // 已删除文件按差异呈现（del 1）
+    await t.restore(f, cwd)                                             // 修复前此处 writeFile 抛 ENOENT
+    expect(await readFile(path.join(cwd, f), 'utf8')).toBe('orig\n')    // 父目录已重建、内容回滚
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('restore 哨兵分支：文件已随目录删除时按已恢复处理（deleteFile 不抛 ENOENT）', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ptc-snap-'))
+    const cwd = path.join(root, 'ws'); await mkdir(cwd, { recursive: true })
+    // 无 force：对缺失路径 rm 即抛 ENOENT（对齐宿主 fsp.rm 行为）
+    const fsWithDelete = { ...fs, deleteFile: async (p: string) => { await rm(p) } }
+    const t = new SnapshotTracker(path.join(root, 'snaps'), fsWithDelete)
+    await t.beforeEdit('sub/n.txt', cwd)               // 编辑前不存在 → 哨兵；此后 sub 始终未被（重）建
+    await t.restore('sub/n.txt', cwd)                  // 修复前 rm 缺失路径抛 ENOENT；现按已恢复处理
+    expect(await fs.exists(path.join(cwd, 'sub', 'n.txt'))).toBe(false)
     await rm(root, { recursive: true, force: true })
   })
 
