@@ -3,6 +3,7 @@ import type { ProtocolAdapter, ResolvedProvider, HistoryMessage, AssistantTurn }
 import type { CodeRuntime } from '../runtime/codeRuntime'
 import { DispatchPool, type DispatchEvent } from '../runtime/dispatchPool'
 import type { ToolDef, ToolContext } from '../tools/registry'
+import { t } from '../i18n'
 import { buildSystemPrompt } from './prompt'
 import { mapDispatchEvent, type Emit } from './events'
 
@@ -13,6 +14,8 @@ export interface LoopDeps {
   tools: Map<string, ToolDef>
   cwd: string
   platform: NodeJS.Platform
+  /** UI 语言（影响面向用户的错误文案），缺省 'en'（测试装配零改动） */
+  locale?: 'en' | 'zh'
   /** 单用户消息护栏，默认 40 */
   maxToolRounds?: number
   emit: Emit   // 推 UiOp（含 thought/edit/explore/run/phase/changes）
@@ -101,7 +104,7 @@ export class AgentLoop {
         if (err.kind === 'rateLimit' || err.kind === 'network') {
           if (this.retries < 3) {
             this.retries++
-            d.emit([{ op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: `${err.kind}: ${this.redact(err.message)} — retrying (${this.retries}/3)` } }])
+            d.emit([{ op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: t(d.locale ?? 'en', 'loop.retrying', { kind: err.kind, message: this.redact(err.message), n: this.retries }) } }])
             this.resetRoundStreaming()
             // Retry-After 指示与指数退避取大者（服务端明确要求的退避不被忽略），封顶 60s——
             // 异常网关的超长值不挂死整轮；适配器未上报 retryAfterMs 时退化为纯指数退避（零回归）
@@ -133,7 +136,7 @@ export class AgentLoop {
       if (!done) {
         this.finalizeThought()   // 无 message_done 的残流同样不让 thought 停在 running
         d.emit([
-          { op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: 'stream ended without message_done' } },
+          { op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: t(d.locale ?? 'en', 'loop.streamNoDone') } },
           { op: 'phase', phase: 'error' },
         ])
         return 'error'
@@ -143,7 +146,7 @@ export class AgentLoop {
         const limit = d.maxToolRounds ?? 40
         if (this.round > limit) {
           d.emit([
-            { op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: `Reached the tool-call round limit (${limit}). Stopping to stay safe.` } },
+            { op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: t(d.locale ?? 'en', 'loop.roundLimit', { limit }) } },
             { op: 'phase', phase: 'error' },
           ])
           return 'error'
@@ -151,7 +154,7 @@ export class AgentLoop {
         const turn = this.pendingTurn
         if (!turn?.toolCall) {
           d.emit([
-            { op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: 'tool_use stop reason without a parsed run_code call' } },
+            { op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: t(d.locale ?? 'en', 'loop.toolUseNoCall') } },
             { op: 'phase', phase: 'error' },
           ])
           return 'error'
@@ -379,7 +382,7 @@ export class AgentLoop {
             // 快照失败（典型：../ 越出工作区被 snapPath 拒绝）不阻断编辑，但绝不静默——否则该修改
             // 完全脱离 Review 面板（不可审阅/不可拒绝）而用户毫无感知
             await d.snapshotTracker.beforeEdit((a as { path?: string }).path ?? '', d.cwd).catch(err => {
-              d.emit([{ op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: `snapshot unavailable: ${(a as { path?: string }).path ?? ''} (${err instanceof Error ? err.message : String(err)}) — this edit is not reviewable/rejectable` } }])
+              d.emit([{ op: 'append', event: { id: d.newEventId(), ts: Date.now(), type: 'error', message: t(d.locale ?? 'en', 'loop.snapshotUnavailable', { path: (a as { path?: string }).path ?? '', error: err instanceof Error ? err.message : String(err) }) } }])
             })
           }
           return pool.submit(name, a)
@@ -421,7 +424,7 @@ export class AgentLoop {
     this.flushStreamPatches()
     this.finalizeThought()   // 保留时间线，标注 stopped——思考冻结计时，内容保留但不再走秒
     this.d.emit([
-      { op: 'append', event: { id: this.d.newEventId(), ts: Date.now(), type: 'error', message: `Stopped (${String(signal.reason ?? 'user')})` } },
+      { op: 'append', event: { id: this.d.newEventId(), ts: Date.now(), type: 'error', message: t(this.d.locale ?? 'en', 'loop.stopped', { reason: String(signal.reason ?? 'user') }) } },
       { op: 'phase', phase: 'completed' },
     ])
     return 'aborted'

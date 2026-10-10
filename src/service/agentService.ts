@@ -1,6 +1,7 @@
 import * as path from 'node:path'
 import type { Protocol, WebviewMessage, UiOp, TimelineEvent, QueuedMessage, FileChangeSummary, SessionPhase, WebviewState, ChatImage } from '../shared/protocol'
 import { initialWebviewState, PROTOCOL_BANNED_MIME } from '../shared/protocol'
+import { t } from '../i18n'
 import { ConfigStore } from './configStore'
 import { WebviewBridge } from './webviewBridge'
 import { SessionStore, SESSION_ID_RE, type SessionStoreDeps, type SessionRecord } from '../session/store'
@@ -47,9 +48,8 @@ export interface VscodeFsApi extends SessionStoreDeps {
 export interface VscodeApi {
   workspaceFolders(): string | undefined
   globalStoragePath(): string
-  envLanguage(): string
   fs: VscodeFsApi
-  openDiff(sessionId: string, relPath: string): Promise<void>
+  openDiff(sessionId: string, relPath: string, title: string): Promise<void>
   /** 执行 VS Code 命令：仅由 service 以硬编码字面量调用，严禁透传 webview 输入的命令名 */
   executeCommand(command: string, ...args: unknown[]): Promise<unknown>
   /** 弹输入框；返回 undefined = 用户取消 */
@@ -80,6 +80,7 @@ export class AgentService {
   private turnInFlight = false   // 同步占位：防止第一个 await 之前的并发 submit 重入
   private turnPromise: Promise<void> | null = null   // 在飞活动（轮次含 drain 链，或 /compact 压缩）的 promise：queueSubmitNow 等收尾用
   private compacting = false   // /compact 压缩在飞：queueSubmitNow 不得 abort 压缩（只中止轮次）
+  private currentLocale: 'en' | 'zh' = 'en'   // UI 语言：配置优先（setLocale 即时更新），bootSnapshot/openSession 起点刷新
   private abort: AbortController | null = null
   private store: SessionStore
   /** JSONL 追加串行化链：emit/onHistory 的 fire-and-forget append 同 tick 背靠背在飞时 fs 层无完成顺序保证，
@@ -140,9 +141,10 @@ export class AgentService {
   }
 
   async bootSnapshot(): Promise<void> {
+    this.currentLocale = (await this.deps.config.getLocale()) ?? 'en'
     const { providers, keyed, active } = await this.deps.config.sanitized()
     const state: WebviewState = {
-      ...initialWebviewState(this.deps.api.envLanguage()),
+      ...initialWebviewState(this.currentLocale),
       phase: this.phase, title: this.title, sessionId: this.sessionId,
       events: this.events, queue: this.queue,
       changes: this.tracker ? await this.tracker.changes(this.cwd()).catch(() => [] as FileChangeSummary[]) : [],
@@ -200,12 +202,17 @@ export class AgentService {
         if (this.isTurnActive()) return   // I3：同上；UI 侧运行中禁用入口，此处兜底竞态
         if (!SESSION_ID_RE.test(m.sessionId)) return   // 非法会话 id（穿越/注入形状）：静默忽略
         await this.openSession(m.sessionId); return
-      case 'reviewFile': await this.deps.api.openDiff(this.sessionId ?? '', m.path.replace(/\\/g, '/')); return
+      case 'reviewFile': {
+        const rel = m.path.replace(/\\/g, '/')
+        await this.deps.api.openDiff(this.sessionId ?? '', rel, t(this.currentLocale, 'review.diffTitle', { path: rel }))
+        return
+      }
       case 'reviewAccept': await this.acceptReject(m.path, 'accept'); return
       case 'reviewReject': await this.acceptReject(m.path, 'reject'); return
       case 'saveProviders': await this.deps.config.saveProviders(m.providers); if (m.active) await this.deps.config.setActive(m.active); await this.bootSnapshot(); return
       case 'saveApiKey': await this.deps.config.saveApiKey(m.providerId, m.apiKey); await this.bootSnapshot(); return
       case 'deleteProvider': await this.deps.config.deleteProvider(m.providerId); await this.bootSnapshot(); return
+      case 'setLocale': this.currentLocale = m.locale; await this.deps.config.setLocale(m.locale); await this.bootSnapshot(); return
       case 'workbenchAction': await this.handleWorkbenchAction(m.action); return
       case 'slashCommand': if (m.command === 'compact') await this.compactHistory(); return
       case 'rpc': await this.handleRpc(m.reqId, m.method, m.params); return
@@ -221,7 +228,7 @@ export class AgentService {
       let targets: string[]
       try { targets = rel ? [rel] : (await this.tracker.changes(cwd)).map(c => c.path) }
       catch (error: unknown) {
-        this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: `review ${action} failed to list changes: ${error instanceof Error ? error.message : String(error)}` } }])
+        this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: t(this.currentLocale, 'service.review.listFailed', { action, error: error instanceof Error ? error.message : String(error) }) } }])
         return   // 仍走 finally 刷新面板
       }
       for (const p of targets) {
@@ -229,7 +236,7 @@ export class AgentService {
         catch (error: unknown) {
           // 单文件失败（快照损坏/globalStorage 写入故障等）：上屏可见 error 后继续处理其余文件——
           // bridge.onMessage 是 void 调用，异常上抛只会中断整批并漏发 changes 刷新，面板停留在过期列表
-          this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: `review ${action} failed for ${p}: ${error instanceof Error ? error.message : String(error)}` } }])
+          this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: t(this.currentLocale, 'service.review.fileFailed', { action, path: p, error: error instanceof Error ? error.message : String(error) }) } }])
         }
       }
     } finally {
@@ -248,11 +255,11 @@ export class AgentService {
    *  运行中拒绝（严禁与在飞轮并发改写 getHistory）；无会话/空历史/失败只上屏反馈，原历史不动；队列不受影响。 */
   private async compactHistory(): Promise<void> {
     if (this.isTurnActive()) {
-      this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'Cannot compact while a turn is running' } }])
+      this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: t(this.currentLocale, 'service.compact.busy') } }])
       return
     }
     if (!this.sessionId || this.history.length === 0) {
-      this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'Nothing to compact: the conversation is empty' } }])
+      this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: t(this.currentLocale, 'service.compact.empty') } }])
       return
     }
     this.turnPromise = this.compactGuarded()   // F1：压缩 promise 挂入在飞占位——queueSubmitNow 等它落地而非误中止
@@ -271,7 +278,7 @@ export class AgentService {
       const active = await this.deps.config.getActive()
       const providerInfo = active ? (await this.deps.config.getProviders()).find(p => p.id === active.providerId) : undefined
       if (!active || !providerInfo) {
-        this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'No provider/model selected' } }])
+        this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: t(this.currentLocale, 'service.noProvider') } }])
         return
       }
       const provider: ResolvedProvider = { info: providerInfo, apiKey: (await this.deps.config.getApiKey(active.providerId)) ?? '', modelId: active.modelId, quality: active.quality,
@@ -300,13 +307,13 @@ export class AgentService {
         // F7：落盘失败降级可见——内存/时间线行为不变（history 已替换、压缩事件已上屏），
         // 但必须在 replaceEvents 之后上屏（否则会被整体替换冲掉），提示重放将不含本次压缩
         if (persistError) {
-          this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: `compact persist failed: ${persistError} (history compacted in memory only; reopening the session will show the uncompacted history)` } }])
+          this.emit([{ op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: t(this.currentLocale, 'service.compact.persistFailed', { error: persistError }) } }])
         }
       } catch (error: unknown) {
         // 失败：原 history 原样保留（此分支不触碰 this.history），只上屏 error 并恢复 phase；不 drain
         const message = error instanceof Error ? error.message : String(error)
         this.emit([
-          { op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: `Compact failed: ${message}` } },
+          { op: 'append', event: { id: `err${++this.idSeq}`, ts: Date.now(), type: 'error', message: t(this.currentLocale, 'service.compact.failed', { error: message }) } },
           { op: 'phase', phase: prevPhase },
         ])
         return
@@ -364,14 +371,14 @@ export class AgentService {
         case 'openFolder': await this.deps.api.executeCommand('workbench.action.files.openFolder'); return
         case 'toggleSidebar': await this.deps.api.executeCommand('workbench.action.toggleSidebarVisibility'); return
         case 'openBrowser': {
-          const url = (await this.deps.api.showInputBox({ prompt: 'Enter the URL to open' }))?.trim()
+          const url = (await this.deps.api.showInputBox({ prompt: t(this.currentLocale, 'service.urlPrompt') }))?.trim()
           if (!url) return   // 用户取消或空输入：静默返回
           await this.deps.api.openSimpleBrowser(url)
           return
         }
       }
     } catch {
-      await this.deps.api.showInfoMessage(action === 'openBrowser' ? 'Unable to open browser' : `Unable to run action: ${action}`)
+      await this.deps.api.showInfoMessage(action === 'openBrowser' ? t(this.currentLocale, 'service.browserFailed') : t(this.currentLocale, 'service.actionFailed', { action }))
     }
   }
 
@@ -410,6 +417,7 @@ export class AgentService {
 
   /** reset:false 用于 runTurn 的隐式建会话——保留已在内存中的时间线/队列（否则首轮 await 间隙入队的消息会被清掉）。 */
   private async openSession(sessionId: string | null, opts: { reset?: boolean } = {}): Promise<void> {
+    this.currentLocale = (await this.deps.config.getLocale()) ?? 'en'
     const reset = opts.reset ?? true
     this.sessionId = sessionId ?? `s${Date.now().toString(36)}${(++this.idSeq).toString(36)}`
     this.tracker = new SnapshotTracker(path.join(this.deps.api.globalStoragePath(), 'snapshots', this.sessionId), {
@@ -423,7 +431,7 @@ export class AgentService {
     if (sessionId) {
       // 打开旧会话：回放 JSONL 恢复内存态；不得向旧会话文件追加 clear（会破坏其回放终态）
       const records = await this.store.load(sessionId)
-      const replayed = this.store.replayToState(records, this.deps.api.envLanguage())
+      const replayed = this.store.replayToState(records, this.currentLocale)
       this.events = replayed.state.events; this.queue = replayed.state.queue
       this.title = replayed.state.title
       // 中断会话的终态可能是 running/submitting——重放后轮次必然已结束，归一为 completed，否则 submit 永远入队
@@ -458,7 +466,7 @@ export class AgentService {
     if (!userText && (images?.length ?? 0) > 0 && !(keepImages?.length ?? 0)) {
       // 纯图消息的附件全被当前协议滤掉：镜像 webview doSubmit 的拒绝——不起空轮，上屏可见错误
       this.emit([
-        { op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'All image attachments were dropped: the active model protocol does not support their format (e.g. GIF on Gemini)' } },
+        { op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: t(this.currentLocale, 'service.images.dropped') } },
         { op: 'phase', phase: 'idle' },
       ])
       return
@@ -466,7 +474,7 @@ export class AgentService {
     this.emit([{ op: 'append', event: { id: `u${++this.idSeq}`, ts: Date.now(), type: 'user', text: userText, ...(keepImages?.length ? { images: keepImages } : {}) } }])
     if (!active) {
       this.emit([
-        { op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'No provider/model selected' } },
+        { op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: t(this.currentLocale, 'service.noProvider') } },
         { op: 'phase', phase: 'idle' },
       ])
       return
@@ -474,7 +482,7 @@ export class AgentService {
     if (!providerInfo) {
       // active 指向已删除的 provider：原先静默返回会让已上屏的用户消息无任何下文——补错误反馈
       this.emit([
-        { op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: 'Selected provider no longer exists' } },
+        { op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: t(this.currentLocale, 'service.provider.gone') } },
         { op: 'phase', phase: 'idle' },
       ])
       return
@@ -488,7 +496,7 @@ export class AgentService {
       await this.persist(this.sessionId!, { kind: 'meta', meta })
     } catch (error: unknown) {
       // globalStorage 持久化故障：降级为可见 error 提示后继续回合（内存时间线/历史仍完整，bridge void 调用不再逃逸成 unhandledRejection）
-      this.emit([{ op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: `session persist failed: ${error instanceof Error ? error.message : String(error)}` } }])
+      this.emit([{ op: 'append', event: { id: `cfg${++this.idSeq}`, ts: Date.now(), type: 'error', message: t(this.currentLocale, 'service.persist.failed', { error: error instanceof Error ? error.message : String(error) }) } }])
     }
     this.emit([{ op: 'title', title }])
     this.abort = new AbortController()
@@ -521,6 +529,7 @@ export class AgentService {
         changes: async () => tracker.changes(this.cwd()).catch(() => [] as FileChangeSummary[]),
       } : undefined,
       newEventId: () => `e${++this.idSeq}`,
+      locale: this.currentLocale,
     })
     try { return await loop.run(userText, this.abort!.signal, images) }
     finally { await runtime.dispose() }

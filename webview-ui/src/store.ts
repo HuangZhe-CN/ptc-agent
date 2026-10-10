@@ -47,7 +47,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   send: m => { if (postImpl) postImpl(m) },
   applyHost: msg => {
     // snapshot/ops 均为协议态：只替换 WebviewState 字段；ui 为 webview 本地态保留。
-    // locale 属协议态（host boot 快照下发 envLanguage）——随 snapshot 更新（I2：此前用内存初值覆盖，恒为 'en'）
+    // locale 属协议态（host boot 快照下发持久化的 ptcAgent.locale，缺省 'en'）——随 snapshot 更新（I2：此前用内存初值覆盖，恒为 'en'）
     if (msg.type === 'snapshot') set(s => ({ ...msg.state, ui: s.ui }))
     else if (msg.type === 'ops') set(s => ({ ...applyUiOps(s, msg.ops) }))
     // rpcResult 由调用处通过回调消费（组件用 pendingRpc map；简化：存最近结果）

@@ -1,6 +1,6 @@
 import type { ProviderInfo, ActiveModel } from '../shared/protocol'
 
-const K_KEYS = 'ptcAgent.keys', K_PROVIDERS = 'ptcAgent.providers', K_ACTIVE = 'ptcAgent.active', K_MODES = 'ptcAgent.thinkingModes'
+const K_KEYS = 'ptcAgent.keys', K_PROVIDERS = 'ptcAgent.providers', K_ACTIVE = 'ptcAgent.active', K_MODES = 'ptcAgent.thinkingModes', K_LOCALE = 'ptcAgent.locale'
 type ThinkingMode = 'adaptive' | 'manual' | 'none'
 
 export interface SecretsLike { store(k: string, v: string): Promise<void>; get(k: string): Promise<string | undefined>; delete(k: string): Promise<void> }
@@ -45,6 +45,11 @@ export class ConfigStore {
     all[`${p}/${m}`] = mode
     await this.state.update(K_MODES, all)
   }
+  async getLocale(): Promise<'en' | 'zh' | undefined> {
+    const v = this.state.get<string>(K_LOCALE)
+    return v === 'en' || v === 'zh' ? v : undefined
+  }
+  async setLocale(l: 'en' | 'zh'): Promise<void> { await this.state.update(K_LOCALE, l) }
   async sanitized(): Promise<{ providers: ProviderInfo[]; keyed: Record<string, boolean>; active: ActiveModel | null }> {
     const keys = await this.readKeys()
     const providers = await this.getProviders()

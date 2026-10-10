@@ -75,6 +75,7 @@ export type WebviewMessage =
   | { type: 'saveProviders'; providers: ProviderInfo[]; active: ActiveModel | null }
   | { type: 'saveApiKey'; providerId: string; apiKey: string }
   | { type: 'deleteProvider'; providerId: string }
+  | { type: 'setLocale'; locale: 'en' | 'zh' }
   | { type: 'workbenchAction'; action: 'focusExplorer' | 'focusTerminal' | 'openFolder' | 'openBrowser' | 'toggleSidebar' }
   | { type: 'slashCommand'; command: 'compact' }
   | { type: 'rpc'; reqId: number; method: 'testProvider' | 'listModels' | 'listSessions'; params: { providerId: string; baseUrl?: string; protocol: Protocol } }

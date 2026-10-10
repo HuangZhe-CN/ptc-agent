@@ -61,6 +61,7 @@ const zh = {
   'manage.delete': '删除',
   'manage.confirmDelete': '确认删除？',
   'manage.back': '返回聊天',
+  'settings.language': '界面语言',
 } as const
 
 const en: Record<keyof typeof zh, string> = {
@@ -118,6 +119,7 @@ const en: Record<keyof typeof zh, string> = {
   'manage.delete': 'Delete',
   'manage.confirmDelete': 'Delete?',
   'manage.back': 'Back to chat',
+  'settings.language': 'Language',
 }
 
 export type ObKey = keyof typeof zh

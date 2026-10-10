@@ -50,9 +50,9 @@ describe('AgentService', () => {
     const bridge = new WebviewBridge(target)
     bridge.attach(target)
     const api = {
-      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs', envLanguage: () => 'en',
+      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs',
       fs: { readDir: async () => [], readFile: async () => { throw new Error('nf') }, appendFile: async () => {}, mkdir: async () => {}, writeFile: async () => {} },
-      openDiff: async () => {},
+      openDiff: async (_sessionId: string, _relPath: string, _title: string) => {},
     }
     const svc = new AgentService({ config: new ConfigStore(memorySecrets(), memoryMemento()), api: api as never, bridge, workerPath: 'x' })
 
@@ -101,14 +101,14 @@ describe('AgentService', () => {
     const bridge = new WebviewBridge(target)
     bridge.attach(target)
     const api = {
-      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs', envLanguage: () => 'en',
+      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs',
       fs: {
         readDir: async () => [...files.keys()].map(p => p.split(/[\\/]/).pop()!),
         readFile: async (p: string) => { const c = files.get(p); if (c === undefined) throw new Error('nf'); return c },
         appendFile: async (p: string, s: string) => { files.set(p, (files.get(p) ?? '') + s) },
         mkdir: async () => {}, writeFile: async () => {}, deleteFile: async () => {},
       },
-      openDiff: async () => {},
+      openDiff: async (_sessionId: string, _relPath: string, _title: string) => {},
     }
     const svc = new AgentService({ config: new ConfigStore(memorySecrets(), memoryMemento()), api: api as never, bridge, workerPath: 'x' })
     listeners[0]({ type: 'ready' })   // 桥握手：flush outbox，此后 ops 直发进 sent
@@ -158,9 +158,9 @@ describe('AgentService', () => {
     const bridge = new WebviewBridge(target)
     bridge.attach(target)
     const api = {
-      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs', envLanguage: () => 'en',
+      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs',
       fs: { readDir: async () => [], readFile: async () => { throw new Error('nf') }, appendFile: async () => {}, mkdir: async () => {}, writeFile: async () => {} },
-      openDiff: async () => {},
+      openDiff: async (_sessionId: string, _relPath: string, _title: string) => {},
     }
     const svc = new AgentService({ config: new ConfigStore(memorySecrets(), memoryMemento()), api: api as never, bridge, workerPath: 'x' })
     listeners[0]({ type: 'ready' })
@@ -229,9 +229,9 @@ describe('AgentService', () => {
     const bridge = new WebviewBridge(target)
     bridge.attach(target)
     const api = {
-      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs', envLanguage: () => 'en',
+      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs',
       fs: { readDir: async () => [], readFile: async () => { throw new Error('nf') }, appendFile: async () => { appendCalls++ }, mkdir: async () => {}, writeFile: async () => {} },
-      openDiff: async () => {},
+      openDiff: async (_sessionId: string, _relPath: string, _title: string) => {},
     }
     const svc = new AgentService({ config: new ConfigStore(memorySecrets(), memoryMemento()), api: api as never, bridge, workerPath: 'x' })
     const handled: Promise<void>[] = []
@@ -268,9 +268,9 @@ describe('AgentService', () => {
     const bridge = new WebviewBridge(target)
     bridge.attach(target)
     const api = {
-      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs', envLanguage: () => 'en',
+      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs',
       fs: { readDir: async () => [], readFile: async () => { throw new Error('nf') }, appendFile: async () => {}, mkdir: async () => {}, writeFile: async () => {}, deleteFile: async () => {} },
-      openDiff: async () => {},
+      openDiff: async (_sessionId: string, _relPath: string, _title: string) => {},
     }
     const svc = new AgentService({ config: new ConfigStore(memorySecrets(), memoryMemento()), api: api as never, bridge, workerPath: 'x' })
     await svc.handleWebviewMessage({ type: 'saveProviders', providers: [{ id: 'p1', label: 'P', protocol: 'openai', baseUrl: 'https://x', models: [{ id: 'm1', label: 'm1', supportsThinking: false }] }], active: { providerId: 'p1', modelId: 'm1', quality: 'low' } })
@@ -320,14 +320,14 @@ describe('AgentService.queueSubmitNow 运行中止立即发 & /compact', () => {
     const bridge = new WebviewBridge(target)
     bridge.attach(target)
     const api = {
-      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs', envLanguage: () => 'en',
+      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs',
       fs: {
         readDir: async () => [...files.keys()].map(p => p.split(/[\\/]/).pop()!),
         readFile: async (p: string) => { const c = files.get(p); if (c === undefined) throw new Error('nf'); return c },
         appendFile: async (p: string, s: string) => { files.set(p, (files.get(p) ?? '') + s) },
         mkdir: async () => {}, writeFile: async () => {}, deleteFile: async () => {},
       },
-      openDiff: async () => {},
+      openDiff: async (_sessionId: string, _relPath: string, _title: string) => {},
     }
     const svc = new AgentService({ config: new ConfigStore(memorySecrets(), memoryMemento()), api: api as never, bridge, workerPath: 'x' })
     bridge.onMessage(m => { void svc.handleWebviewMessage(m) })
@@ -761,9 +761,9 @@ describe('AgentService.workbenchAction', () => {
     let inputResult: string | undefined
     const bridge = new WebviewBridge({ postMessage: async () => true })
     const api = {
-      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs', envLanguage: () => 'en',
+      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs',
       fs: { readDir: async () => [], readFile: async () => { throw new Error('nf') }, appendFile: async () => {}, mkdir: async () => {}, writeFile: async () => {} },
-      openDiff: async () => {},
+      openDiff: async (_sessionId: string, _relPath: string, _title: string) => {},
       executeCommand: async (command: string, ...args: unknown[]) => { calls.push({ command, args }) },
       showInputBox: async () => inputResult,
       showInfoMessage: async (msg: string) => { infos.push(msg) },
@@ -813,5 +813,59 @@ describe('AgentService.workbenchAction', () => {
     setInput('https://example.com')
     await expect(svc.handleWebviewMessage({ type: 'workbenchAction', action: 'openBrowser' })).resolves.toBeUndefined()
     expect(infos).toEqual(['Unable to run action: focusExplorer', 'Unable to open browser'])
+  })
+})
+
+describe('AgentService.setLocale 与 host 侧 i18n', () => {
+  /** 最小夹具：真实 ConfigStore（内存 memento，自带 getLocale/setLocale）+ 桥握手。 */
+  const setup = () => {
+    const sent: HostMessage[] = []
+    const listeners: Array<(m: unknown) => void> = []
+    const disposable = { dispose: () => undefined }
+    const target: PostTarget = {
+      postMessage: async (m: unknown) => { sent.push(m as HostMessage); return true },
+      onDidReceiveMessage: (l: (m: unknown) => void) => { listeners.push(l); return disposable },
+      onDidDispose: (_cb: () => void) => disposable,
+    }
+    const bridge = new WebviewBridge(target)
+    bridge.attach(target)
+    const api = {
+      workspaceFolders: () => 'E:\\ws', globalStoragePath: () => 'E:\\gs',
+      fs: { readDir: async () => [], readFile: async () => { throw new Error('nf') }, appendFile: async () => {}, mkdir: async () => {}, writeFile: async () => {} },
+      openDiff: async (_sessionId: string, _relPath: string, _title: string) => {},
+    }
+    const config = new ConfigStore(memorySecrets(), memoryMemento())
+    const svc = new AgentService({ config, api: api as never, bridge, workerPath: 'x' })
+    bridge.onMessage(m => { void svc.handleWebviewMessage(m) })
+    listeners[0]({ type: 'ready' })
+    return { svc, config, sent }
+  }
+  const lastSnapshot = (sent: HostMessage[]): { state: { locale: string } } =>
+    [...sent].reverse().find(s => s.type === 'snapshot') as unknown as { state: { locale: string } }
+  const errorMessages = (sent: HostMessage[]): string[] =>
+    sent.filter(s => s.type === 'ops').flatMap(s => (s as { ops: UiOp[] }).ops)
+      .filter(o => o.op === 'append' && (o as { event: { type: string } }).event.type === 'error')
+      .map(o => (o as { event: { message: string } }).event.message)
+
+  it('setLocale 生效链：config.setLocale 以 zh 被调用，随后下发的 snapshot.state.locale 为 zh', async () => {
+    const { svc, config, sent } = setup()
+    const setLocaleSpy = vi.spyOn(config, 'setLocale')
+    await svc.handleWebviewMessage({ type: 'setLocale', locale: 'zh' })
+    expect(setLocaleSpy).toHaveBeenCalledWith('zh')
+    expect(lastSnapshot(sent).state.locale).toBe('zh')
+  })
+
+  it('zh 下错误消息中文化：setLocale 后无 provider 提交，error 事件为中文文案', async () => {
+    const { svc, sent } = setup()
+    await svc.handleWebviewMessage({ type: 'setLocale', locale: 'zh' })
+    await svc.handleWebviewMessage({ type: 'submit', text: 'hi' })
+    expect(errorMessages(sent)).toEqual(['未选择模型服务'])
+  })
+
+  it('默认英文：config.getLocale 返回 undefined 时 snapshot.state.locale 为 en', async () => {
+    const { svc, config, sent } = setup()
+    expect(await config.getLocale()).toBeUndefined()
+    await svc.bootSnapshot()
+    expect(lastSnapshot(sent).state.locale).toBe('en')
   })
 })

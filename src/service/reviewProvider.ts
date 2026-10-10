@@ -20,8 +20,8 @@ export function registerSnapshotContentProvider(resolveTracker: () => SnapshotTr
 }
 
 /** 打开 快照(original) ↔ 当前文件 的 diff 编辑器。 */
-export async function openSnapshotDiff(sessionId: string, relPath: string, fileAbsPath: string): Promise<void> {
+export async function openSnapshotDiff(sessionId: string, relPath: string, fileAbsPath: string, title: string): Promise<void> {
   const snapUri = vscode.Uri.parse(`${SNAPSHOT_SCHEME}:/${sessionId}/${relPath.split('/').map(encodeURIComponent).join('/')}`)
   const fileUri = vscode.Uri.file(fileAbsPath)
-  await vscode.commands.executeCommand('vscode.diff', snapUri, fileUri, `${relPath} (original ↔ current)`, { preserveFocus: true })
+  await vscode.commands.executeCommand('vscode.diff', snapUri, fileUri, title, { preserveFocus: true })
 }

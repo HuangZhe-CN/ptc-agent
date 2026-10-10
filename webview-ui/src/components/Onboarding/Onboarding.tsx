@@ -224,6 +224,8 @@ export function ProviderManager({ onBack }: { onBack?: () => void }): JSX.Elemen
   const providerKeyed = useAgentStore(s => s.providerKeyed)
   const active = useAgentStore(s => s.active)
   const send = useAgentStore(s => s.send)
+  // 语言切换选中态：locale 归一化（与 ob 同规则）zh* → zh，其余 → en
+  const curLocale: 'en' | 'zh' = locale.toLowerCase().startsWith('zh') ? 'zh' : 'en'
 
   const [adding, setAdding] = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
@@ -301,6 +303,24 @@ export function ProviderManager({ onBack }: { onBack?: () => void }): JSX.Elemen
         <i className="codicon codicon-add" aria-hidden="true" />
         {ob(locale, 'manage.add')}
       </button>
+      {/* 界面语言：host 持久化并回推 snapshot，全组件随 locale 自动重渲染 */}
+      <div className="obField">
+        <span className="obFieldLabel">{ob(locale, 'settings.language')}</span>
+        <div className="obQualitySeg" role="radiogroup" aria-label={ob(locale, 'settings.language')}>
+          {(['en', 'zh'] as const).map(l => (
+            <button
+              key={l}
+              type="button"
+              role="radio"
+              aria-checked={curLocale === l}
+              className={`obQualityOpt${curLocale === l ? ' on' : ''}`}
+              onClick={() => { if (l !== curLocale) send({ type: 'setLocale', locale: l }) }}
+            >
+              {l === 'en' ? 'English' : '中文'}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

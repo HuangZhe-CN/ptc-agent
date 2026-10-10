@@ -18,7 +18,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const api: VscodeApi = {
     workspaceFolders: () => wsRoot(),
     globalStoragePath: () => context.globalStorageUri.fsPath,
-    envLanguage: () => vscode.env.language,
     fs: {
       readDir: p => fsp.readdir(p),
       readFile: p => fsp.readFile(p, 'utf8'),
@@ -38,14 +37,14 @@ export function activate(context: vscode.ExtensionContext): void {
         try { const st = await fsp.stat(p); return { mtimeMs: st.mtimeMs, size: st.size } } catch { return null }
       },
     },
-    openDiff: async (sessionId, relPath) => {
+    openDiff: async (sessionId, relPath, title) => {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)) return   // 非法会话 id：忽略（防 uri scheme 注入/穿越）
       const root = wsRoot() ?? process.cwd()
       const rel = relPath.replace(/\\/g, '/')
       const abs = path.resolve(root, rel)
       const rootAbs = path.resolve(root)
       if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) return   // 相对路径逃逸工作区：忽略
-      await openSnapshotDiff(sessionId, rel, abs)
+      await openSnapshotDiff(sessionId, rel, abs, title)
     },
     executeCommand: async (command, ...args) => { await vscode.commands.executeCommand(command, ...args) },
     showInputBox: async opts => vscode.window.showInputBox({ prompt: opts.prompt, value: opts.value }),
