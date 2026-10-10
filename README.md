@@ -1,134 +1,140 @@
-# PTC Agent（Pure-Then-Code）
+# PTC Agent (Pure-Then-Code)
 
-极简、快速的 VS Code 编程智能体。PTC/Code mode 的核心机制：模型不逐个调用工具，而是编写一段 TypeScript 程序，经内置 `run_code` 工具在沙箱 worker 线程中执行；程序内可调用读文件、写文件、bash、搜索等工具函数；执行结束后，**仅程序的 return 值与 console.log 输出回注到模型上下文**——上下文保持精简，长任务的中间过程不会撑爆 token。
+English | [简体中文](README.zh-CN.md)
 
-- **Pure**：模型先思考、规划、探索（read/glob/grep 只读）
-- **Then Code**：一次生成程序批量完成编辑与命令执行
-- **快照 Review**：所有文件改动先落快照，Accept 才保留、Reject 一键还原
+A minimal, fast coding agent for VS Code. The core mechanism of PTC/Code mode: instead of calling tools one by one, the model writes a TypeScript program and executes it in a sandboxed worker thread via the built-in `run_code` tool. Inside the program it can call tool functions such as read file, write file, bash, and search. When execution finishes, **only the program's return value and console.log output are fed back into the model context** — the context stays lean, so intermediate steps of long tasks never blow up the token budget.
 
-## 系统要求
+- **Pure**: the model thinks, plans, and explores first (read/glob/grep are read-only)
+- **Then Code**: one generated program batch-completes the edits and command executions
+- **Snapshot Review**: all file changes land in snapshots first — Accept keeps them, Reject restores with one click
 
-| 项目 | 要求 |
+## System Requirements
+
+| Item | Requirement |
 | --- | --- |
-| VS Code | ≥ 1.101.0（worker 运行时依赖扩展宿主内置 Node 22） |
-| 操作系统 | Windows / macOS / Linux |
+| VS Code | ≥ 1.101.0 (the worker runtime depends on the Node 22 built into the extension host) |
+| OS | Windows / macOS / Linux |
 
-> 注意：worker 线程使用 VS Code 扩展宿主内置的 Node 运行时，需要 VS Code 1.101+（Node 22）。低版本下 worker 无法启动。
+> Note: the worker thread uses the Node runtime built into the VS Code extension host, which requires VS Code 1.101+ (Node 22). On older versions the worker fails to start.
 
-## 安装
+## Installation
 
-### 方式一：安装 .vsix
-
-```bash
-code --install-extension ptc-agent-<版本>.vsix   # 版本见根 package.json 的 version 字段；发版产物为仓库根目录 ptc-agent-x.y.z.vsix
-```
-
-### 方式二：源码运行（F5 调试）
+### Option 1: Install the .vsix
 
 ```bash
-npm install          # 根目录依赖（含 webview-ui workspace）
-npm run build        # 拉取 codicons + esbuild 主进程 + vite 构建 webview
+code --install-extension ptc-agent-<version>.vsix   # version = the version field in the root package.json; release artifacts are ptc-agent-x.y.z.vsix in the repo root
 ```
 
-在 VS Code 中打开本项目，按 F5 启动「扩展开发宿主」，左侧活动栏出现 PTC Agent 图标即成功。
+### Option 2: Run from source (F5 debugging)
 
-## 首次启动：三步配置向导
+```bash
+npm install          # root dependencies (includes the webview-ui workspace)
+npm run build        # fetch codicons + esbuild the extension host + vite build the webview
+```
 
-首次打开 PTC Agent 视图会进入引导向导，全部在 UI 内完成，无需手改任何配置文件：
+Open this project in VS Code and press F5 to launch the Extension Development Host. When the PTC Agent icon appears in the left activity bar, it is running.
 
-1. **选择协议** —— OpenAI 兼容 / Anthropic / Gemini 三选一；
-2. **填写 baseURL 与 API 密钥** —— 表单已预填各协议官方默认 baseURL（见下表），密钥经 VS Code SecretStorage 存储，绝不写入工作区；OpenAI 兼容协议支持「获取模型列表」在线拉取模型清单，Anthropic / Gemini 无标准列表端点，手动添加即可；
-3. **选择模型** —— 从已添加模型中选定默认模型，并选择质量档位（low / medium / high）。
+## First Run: Three-Step Setup Wizard
 
-完成三步即可在输入框提交任务。后续可随时通过模型切换浮层更换模型 / 质量档位，或在设置管理页增删服务。
+The first time you open the PTC Agent view, a setup wizard appears. Everything happens in the UI — no config file editing required:
 
-## 协议支持
+1. **Choose a protocol** — OpenAI-compatible / Anthropic / Gemini, pick one of the three;
+2. **Fill in baseURL and API key** — the form pre-fills each protocol's official default baseURL (see the table below). Keys are stored via VS Code SecretStorage and never written into the workspace. The OpenAI-compatible protocol supports "fetch model list" to pull the model catalog online; Anthropic / Gemini have no standard list endpoint, so add models manually;
+3. **Choose a model** — pick the default model from the ones you have added and select a quality tier (low / medium / high).
 
-| 协议 | 默认 baseURL | 适用服务 |
+Once the three steps are done, submit tasks from the input box. You can switch model / quality tier anytime via the model-switcher popover, or add and remove services on the settings management page.
+
+## Language
+
+The UI defaults to English. Activity bar → PTC Agent → the manage icon at the top opens the settings management page, where the "Interface Language" section switches between Chinese and English — effective immediately and persisted.
+
+## Protocol Support
+
+| Protocol | Default baseURL | Applicable services |
 | --- | --- | --- |
-| OpenAI 兼容 | `https://api.openai.com/v1` | OpenAI 官方及一切兼容 `/chat/completions` 的服务（DeepSeek、vLLM、OneAPI 网关等） |
-| Anthropic | `https://api.anthropic.com` | Claude 系列官方 API 及兼容 `/v1/messages` 的网关 |
-| Gemini | `https://generativelanguage.googleapis.com/v1beta` | Google Gemini 系列官方 API |
+| OpenAI-compatible | `https://api.openai.com/v1` | Official OpenAI and any service compatible with `/chat/completions` (DeepSeek, vLLM, OneAPI gateways, etc.) |
+| Anthropic | `https://api.anthropic.com` | Official Claude-family APIs and gateways compatible with `/v1/messages` |
+| Gemini | `https://generativelanguage.googleapis.com/v1beta` | Official Google Gemini-family APIs |
 
-配置示例（自建 OpenAI 兼容网关）：协议选「OpenAI 兼容」，baseURL 填 `https://your-gateway.example.com/v1`，密钥填网关签发的 key，添加模型后即可使用。
+Configuration example (self-hosted OpenAI-compatible gateway): choose "OpenAI-compatible" as the protocol, set baseURL to `https://your-gateway.example.com/v1`, fill in the key issued by the gateway, add a model, and you are ready to go.
 
-### 质量档位（quality）的含义
+### What the quality tier means
 
-质量档位会映射为各协议各自的思考控制参数：
+The quality tier maps to each protocol's own thinking-control parameter:
 
-| quality | OpenAI 兼容 | Anthropic | Gemini |
+| quality | OpenAI-compatible | Anthropic | Gemini |
 | --- | --- | --- | --- |
-| low / medium / high | `reasoning_effort` 参数 | 思考预算 `budget_tokens`（1024 / 4096 / 16384；Claude 4.6+ 默认走 adaptive 思考，报 400 时自动降级） | `thinkingLevel`（LOW / MEDIUM / HIGH） |
+| low / medium / high | `reasoning_effort` parameter | thinking budget `budget_tokens` (1024 / 4096 / 16384; Claude 4.6+ defaults to adaptive thinking and auto-downgrades on a 400 error) | `thinkingLevel` (LOW / MEDIUM / HIGH) |
 
-仅对勾选了「支持思考」的模型生效。
+Applies only to models with "supports thinking" checked.
 
-## 工具集
+## Toolset
 
-`run_code` 程序内可用的 6 个内置工具：
+The 6 built-in tools available inside `run_code` programs:
 
-| 工具 | 说明 | 并发 |
+| Tool | Description | Concurrency |
 | --- | --- | --- |
-| `read_file(path)` | 读取文本文件 | 安全 |
-| `write_file(path, content)` | 写入文件（写前自动快照） | 串行 |
-| `edit_file(path, find, replace)` | 精确查找替换编辑 | 串行 |
-| `glob(pattern)` | 文件名通配匹配 | 安全 |
-| `grep(pattern, path?)` | 内容正则搜索 | 安全 |
-| `bash(command)` | 在工作区目录执行 shell 命令 | 串行 |
+| `read_file(path)` | Read a text file | safe |
+| `write_file(path, content)` | Write a file (snapshots automatically before writing) | serial |
+| `edit_file(path, find, replace)` | Exact find-and-replace editing | serial |
+| `glob(pattern)` | Filename glob matching | safe |
+| `grep(pattern, path?)` | Regex content search | safe |
+| `bash(command)` | Run a shell command in the workspace directory | serial |
 
-并发安全的工具在调度池中并行执行，写操作自动串行化，同一轮内最多 10 个并行。
+Concurrency-safe tools run in parallel in the scheduling pool, writes are serialized automatically, and at most 10 tools run in parallel within a single round.
 
-## 安全声明
+## Security Statement
 
-`bash` 与 `run_code` 工具以当前用户权限在本机执行，拥有**完整的文件系统与网络访问能力**（与 Cline 等编码代理的默认语义一致），文件读写与命令执行不限于当前工作区。`run_code` 的 worker 线程仅提供计算时间、墙钟、内存与输出量的**资源限制隔离，不是安全沙箱**——程序内仍可动态加载 Node 内置模块访问本机；由其派生的子进程继承扩展宿主的全部环境变量。请仅在信任的工作区与信任的任务中使用本扩展。
+The `bash` and `run_code` tools execute on your machine with your current user privileges and have **full file-system and network access** (the same default semantics as coding agents like Cline); file reads/writes and command execution are not limited to the current workspace. The `run_code` worker thread only provides **resource-limit isolation** — compute time, wall clock, memory, and output size — **it is not a security sandbox**: programs can still dynamically load Node built-in modules to access the host machine, and subprocesses spawned by the program inherit the extension host's entire environment. Use this extension only with trusted workspaces and trusted tasks.
 
-## Worker 预算与护栏（默认值）
+## Worker Budgets and Guardrails (defaults)
 
-| 参数 | 默认值 | 说明 |
+| Parameter | Default | Description |
 | --- | --- | --- |
-| `computeMs` | 60 秒 | 程序纯计算时间预算（事件循环活跃时长） |
-| `maxWallMs` | 600 秒（10 分钟） | 墙钟时间上限（含等待 I/O） |
-| `maxOutputBytes` | 64 MB | return 值 + 日志合计输出上限，超限截断终止 |
-| `maxOldGenerationSizeMb` | 512 MB | worker 线程堆内存上限 |
-| `maxParallel` | 10 | 调度池最大并行工具数 |
-| `maxToolRounds` | 40 | 单次任务最大工具执行轮数 |
+| `computeMs` | 60 s | Pure compute-time budget of the program (event-loop-active duration) |
+| `maxWallMs` | 600 s (10 min) | Wall-clock limit (including I/O waits) |
+| `maxOutputBytes` | 64 MB | Combined cap on return value + logs; exceeding it truncates and terminates |
+| `maxOldGenerationSizeMb` | 512 MB | Worker thread heap limit |
+| `maxParallel` | 10 | Max parallel tools in the scheduling pool |
+| `maxToolRounds` | 40 | Max tool-execution rounds per task |
 
-任一预算耗尽即终止该程序，错误信息回注模型上下文由其自行调整。
+When any budget is exhausted, the program is terminated and the error message is fed back into the model context so it can adjust on its own.
 
-## 会话与快照 Review
+## Sessions & Snapshot Review
 
-- **会话持久化**：每轮对话（时间线事件、状态机阶段）以 JSONL 持久化于 VS Code globalStorage：`<globalStorage>/ptc-agent/sessions/<workspaceHash>/<sessionId>.jsonl`，按工作区隔离，可从顶部历史下拉恢复任意会话。
-- **快照 Review**：Agent 每次编辑文件前先把原文快照到 `<globalStorage>/ptc-agent/snapshots/<sessionId>/`。任务完成进入 Review 阶段后：
-  - 点击改动文件 → 打开 VS Code 原生 diff 视图对比快照与当前内容；
-  - **Accept**：保留改动并丢弃该文件快照（不传路径则 Accept 全部）；
-  - **Reject**：从快照还原文件到编辑前状态（不传路径则 Reject 全部）。
+- **Session persistence**: every conversation turn (timeline events, state-machine phases) is persisted as JSONL in VS Code globalStorage: `<globalStorage>/ptc-agent/sessions/<workspaceHash>/<sessionId>.jsonl`, isolated per workspace. Restore any session from the history dropdown at the top.
+- **Snapshot Review**: before each file edit, the agent snapshots the original content to `<globalStorage>/ptc-agent/snapshots/<sessionId>/`. When the task finishes and enters the Review phase:
+  - Click a changed file → a native VS Code diff view opens, comparing the snapshot with the current content;
+  - **Accept**: keep the change and discard that file's snapshot (no path = Accept all);
+  - **Reject**: restore the file from the snapshot to its pre-edit state (no path = Reject all).
 
-## 已知事项与排障
+## Known Issues & Troubleshooting
 
-### 代理环境 SSE 断流（`http.proxySupport`）
+### SSE stream stalls behind a proxy (`http.proxySupport`)
 
-VS Code 默认开启 `http.proxySupport`，会劫持扩展的网络请求；某些代理环境下会导致 SSE 流式响应断流、卡住无输出。排障步骤：
+VS Code enables `http.proxySupport` by default, which intercepts extension network requests; under some proxies this breaks SSE streaming responses — the stream stalls with no output. To troubleshoot:
 
-1. 打开 VS Code 设置（`Ctrl+,`）；
-2. 搜索 `http.proxySupport`，将其设为 **`off`**；
-3. 重启 VS Code（`Developer: Reload Window` 即可）后再试。
+1. Open VS Code settings (`Ctrl+,`);
+2. Search for `http.proxySupport` and set it to **`off`**;
+3. Restart VS Code (`Developer: Reload Window` is enough) and try again.
 
-若仍不通，请确认 baseURL 可达（可临时用 `curl` 验证），并检查代理是否放行 SSE 长连接。
+If it still fails, confirm that the baseURL is reachable (temporarily verify with `curl`) and check that the proxy allows long-lived SSE connections.
 
-### Windows 路径约定
+### Windows path conventions
 
-工具与 `run_code` 程序内的路径统一使用**正斜杠**（`/`）相对路径（相对当前工作区根目录），如 `src/index.ts`。Windows 下反斜杠路径不受支持，快照、diff 与 review 均按正斜杠约定解析。
+Paths in tools and inside `run_code` programs uniformly use **forward-slash** (`/`) relative paths (relative to the current workspace root), e.g. `src/index.ts`. Backslash paths are not supported on Windows; snapshots, diffs, and review all resolve per the forward-slash convention.
 
-### 其他
+### Misc
 
-- API 密钥仅存于 VS Code SecretStorage（`globalStorage` 中不落盘明文），重装插件需重新录入；
-- 插件无任何命令面板命令，全部交互在 PTC Agent 侧边栏内完成；
-- 上游 API 限流（429）时自动按响应指示退避重试，鉴权失败（401/403）提示检查密钥。
+- API keys live only in VS Code SecretStorage (never written in plaintext under `globalStorage`); reinstalling the extension requires re-entering them;
+- The extension registers no command-palette commands; all interaction happens inside the PTC Agent sidebar;
+- On upstream API rate limiting (429) it retries with backoff as instructed by the response; auth failures (401/403) prompt a key check.
 
-## 开发
+## Development
 
 ```bash
-npm run build    # 完整构建（codicons + 主进程 esbuild + webview vite）
-npm run watch    # 主进程 watch 模式
-npm test         # vitest 单元测试
-npx @vscode/vsce package --no-dependencies   # 打包 .vsix
+npm run build    # full build (codicons + extension-host esbuild + webview vite)
+npm run watch    # extension-host watch mode
+npm test         # vitest unit tests
+npx @vscode/vsce package --no-dependencies   # package the .vsix
 ```
